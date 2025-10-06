@@ -311,7 +311,7 @@ class TelegramNotifier:
         
         message = f"{report_emoji} *{report_type}*\n"
         message += f"_{date_str}_\n\n"
-        message += "✅ No tropical cyclones or low pressure areas detected within monitoring range.\n\n"
+        message += "✅ No tropical cyclones or low pressure areas detected within 700 km monitoring range.\n\n"
         message += "🔍 Bot is actively monitoring PAGASA updates.\n"
         message += f"🕐 Report as of {time_str} PHT"
         
