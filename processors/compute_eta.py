@@ -13,7 +13,7 @@ class PortETACalculator:
     """Calculate distances and ETAs from typhoon to ports"""
     
     EARTH_RADIUS_KM = 6371.0
-    PROXIMITY_THRESHOLD_KM = 300
+    PROXIMITY_THRESHOLD_KM = 700  # Extended range for container terminal operations
     
     # Direction mapping for bearing calculation
     DIRECTIONS = {
