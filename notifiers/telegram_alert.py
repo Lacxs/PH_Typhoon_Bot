@@ -1,6 +1,6 @@
 """
 Telegram Alert Notifier
-Sends formatted typhoon alerts to Telegram
+Sends formatted typhoon and LPA alerts to Telegram
 """
 
 import logging
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class TelegramNotifier:
-    """Send typhoon alerts via Telegram"""
+    """Send typhoon and LPA alerts via Telegram"""
     
     def __init__(self, token, chat_id):
         """
@@ -27,12 +27,18 @@ class TelegramNotifier:
     
     def send_alert(self, bulletin_data):
         """
-        Send formatted typhoon alert
+        Send formatted weather alert
         
         Args:
             bulletin_data: Dict containing bulletin information
         """
-        message = self._format_alert_message(bulletin_data)
+        system_type = bulletin_data.get('type', 'Tropical Cyclone')
+        
+        if system_type == 'Low Pressure Area':
+            message = self._format_lpa_message(bulletin_data)
+        else:
+            message = self._format_typhoon_message(bulletin_data)
+        
         return self._send_message(message)
     
     def send_error_notification(self, error_message):
@@ -40,16 +46,57 @@ class TelegramNotifier:
         message = f"🚨 *Typhoon Bot Error*\n\n```\n{error_message}\n```"
         return self._send_message(message)
     
-    def _format_alert_message(self, data):
-        """
-        Format bulletin data into Telegram markdown message
+    def _format_lpa_message(self, data):
+        """Format LPA alert message"""
+        location = data.get('location', {})
+        movement = data.get('movement', {})
+        port_status = data.get('port_status', {})
         
-        Args:
-            data: Bulletin data dict
+        # Header with different emoji for LPA
+        message = f"🌧️ *PAGASA Weather Update: Low Pressure Area*\n"
+        message += f"_Monitoring potential tropical cyclone development_\n\n"
         
-        Returns:
-            Formatted message string
-        """
+        # Location
+        lat = location.get('latitude')
+        lon = location.get('longitude')
+        if lat and lon:
+            message += f"📍 Location: {lat}°N, {lon}°E\n"
+        
+        # Movement (if available)
+        direction = movement.get('direction')
+        speed = movement.get('speed')
+        if direction and speed:
+            message += f"➡️ Movement: {direction} at {speed} km/h\n"
+        elif direction:
+            message += f"➡️ Movement: {direction}\n"
+        else:
+            message += f"➡️ Movement: Slow-moving or stationary\n"
+        
+        message += f"💨 Status: Low Pressure Area (pre-cyclone stage)\n"
+        
+        # Port status section
+        message += "\n*🚢 Port Distances:*\n"
+        
+        # Sort ports by distance (closest first)
+        sorted_ports = self._sort_ports_by_distance(port_status)
+        
+        for port_name in sorted_ports:
+            status = port_status[port_name]
+            message += self._format_port_distance(port_name, status)
+        
+        # Footer
+        message += "\n⚠️ *Advisory:*\n"
+        message += "LPAs may develop into tropical depressions. Monitor for updates.\n"
+        message += "\n📊 Source: PAGASA (official)\n"
+        
+        # Timestamp
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        message += f"🕐 Updated: {timestamp} PHT"
+        
+        return message
+    
+    def _format_typhoon_message(self, data):
+        """Format typhoon/tropical cyclone alert message"""
         cyclone_name = data.get('cyclone_name', 'Unknown')
         location = data.get('location', {})
         movement = data.get('movement', {})
@@ -134,8 +181,16 @@ class TelegramNotifier:
         
         return sorted(port_status.keys(), key=threat_score)
     
+    def _sort_ports_by_distance(self, port_status):
+        """Sort ports by distance (closest first)"""
+        def distance_score(port_name):
+            status = port_status[port_name]
+            return status.get('distance_km', 9999)
+        
+        return sorted(port_status.keys(), key=distance_score)
+    
     def _format_port_status(self, port_name, status):
-        """Format individual port status line"""
+        """Format individual port status line (for typhoons)"""
         tcws = status.get('tcws')
         eta = status.get('eta_hours')
         distance = status.get('distance_km')
@@ -169,6 +224,28 @@ class TelegramNotifier:
         # Distance if not under signal
         if not tcws and distance:
             line += f" ({int(distance)} km away)"
+        
+        line += "\n"
+        
+        return line
+    
+    def _format_port_distance(self, port_name, status):
+        """Format port distance line (for LPAs)"""
+        distance = status.get('distance_km')
+        in_proximity = status.get('in_proximity', False)
+        
+        # Icon based on proximity
+        if distance < 200:
+            icon = "🟠"
+        elif in_proximity:  # < 300 km
+            icon = "🟡"
+        else:
+            icon = "🟢"
+        
+        line = f"{icon} *{port_name}* – {int(distance)} km away"
+        
+        if distance < 300:
+            line += " (within monitoring range)"
         
         line += "\n"
         
@@ -212,5 +289,5 @@ class TelegramNotifier:
     
     def send_test_message(self):
         """Send a test message to verify bot configuration"""
-        message = "✅ *Typhoon Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon alerts here."
+        message = "✅ *Typhoon Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon and LPA alerts here."
         return self._send_message(message)
