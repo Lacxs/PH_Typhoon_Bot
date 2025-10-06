@@ -22,7 +22,7 @@ jobs:
           python-version: "3.11"
       
       - name: Cache pip dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -38,7 +38,7 @@ jobs:
         run: mkdir -p data
       
       - name: Restore cached bulletin data
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: data/
           key: bulletin-cache-${{ github.run_number }}
@@ -53,7 +53,7 @@ jobs:
       
       - name: Upload bulletin archive (on failure)
         if: failure()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bulletin-logs
           path: data/
