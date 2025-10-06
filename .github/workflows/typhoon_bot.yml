@@ -5,8 +5,14 @@ on:
     # Run every 2 hours
     - cron: "0 */2 * * *"
   
-  # Allow manual trigger
+  # Allow manual trigger with options
   workflow_dispatch:
+    inputs:
+      force_status_report:
+        description: 'Send status report even if not scheduled'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   run-bot:
@@ -22,7 +28,7 @@ jobs:
           python-version: "3.11"
       
       - name: Cache pip dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
@@ -38,7 +44,7 @@ jobs:
         run: mkdir -p data
       
       - name: Restore cached bulletin data
-        uses: actions/cache@v4
+        uses: actions/cache@v3
         with:
           path: data/
           key: bulletin-cache-${{ github.run_number }}
@@ -53,7 +59,7 @@ jobs:
       
       - name: Upload bulletin archive (on failure)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: bulletin-logs
           path: data/
