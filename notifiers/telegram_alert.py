@@ -151,7 +151,7 @@ class TelegramNotifier:
             message += " | JTWC (forecast guidance)"
         
         # Timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        timestamp = datetime.now(PHT).strftime("%Y-%m-%d %H:%M")
         message += f"\n🕐 Updated: {timestamp} PHT"
         
         return message
@@ -296,15 +296,23 @@ class TelegramNotifier:
         return self._send_message(message)
     
     def send_status_update(self):
-        """Send daily status update when no threats exist"""
-        now = datetime.now()
+        """Send twice-daily status update when no threats exist"""
+        now = datetime.now(PHT)
         date_str = now.strftime("%B %d, %Y")
         time_str = now.strftime("%I:%M %p")
         
-        message = f"☀️ *Daily Weather Status*\n"
+        # Determine if morning or evening report
+        if now.hour < 12:
+            report_type = "Morning Weather Report"
+            report_emoji = "🌅"
+        else:
+            report_type = "Evening Weather Report"
+            report_emoji = "🌆"
+        
+        message = f"{report_emoji} *{report_type}*\n"
         message += f"_{date_str}_\n\n"
         message += "✅ No tropical cyclones or low pressure areas detected within monitoring range.\n\n"
         message += "🔍 Bot is actively monitoring PAGASA updates.\n"
-        message += f"🕐 Status as of {time_str} PHT"
+        message += f"🕐 Report as of {time_str} PHT"
         
         return self._send_message(message)
