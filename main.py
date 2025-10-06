@@ -6,7 +6,7 @@ Main orchestrator for PAGASA + JTWC bulletin tracking
 import os
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fetchers.pagasa_parser import PAGASAParser
@@ -21,17 +21,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Port coordinates (latitude, longitude)
+# Port coordinates (latitude, longitude) - Ordered North to South
 PORTS = {
-    "Manila": (14.5995, 120.9842),
-    "Subic": (14.8200, 120.2800),
-    "Batangas": (13.7565, 121.0583),
-    "Iloilo": (10.6960, 122.5712),
-    "Cagayan": (18.4790, 121.6447)
+    "SBITC": (14.8045, 120.2663),     # Subic Bay International Terminal
+    "MICT": (14.6036, 120.9466),      # Manila International Container Terminal
+    "Bauan": (13.7823, 120.9895),     # Bauan International Port, Batangas
+    "VCT": (10.7064, 122.5947),       # Visayas Container Terminal, Iloilo
+    "MICTSI": (8.5533, 124.7667)      # Mindanao International Container Terminal
 }
 
 CACHE_FILE = Path("data/last_bulletin.json")
 ARCHIVE_FILE = Path("data/bulletin_archive.json")
+STATUS_FILE = Path("data/last_status_update.json")
 
 
 def load_cache():
@@ -101,6 +102,50 @@ def should_send_alert(current_bulletin, cached_bulletin):
     return False
 
 
+def should_send_status_update():
+    """Check if we should send a daily status update (once per day at ~8 AM PHT)"""
+    if not STATUS_FILE.exists():
+        return True
+    
+    try:
+        with open(STATUS_FILE, 'r') as f:
+            last_status = json.load(f)
+        
+        last_update_str = last_status.get('last_update')
+        if not last_update_str:
+            return True
+        
+        last_update = datetime.fromisoformat(last_update_str)
+        now = datetime.now()
+        
+        # Send daily update if:
+        # 1. More than 24 hours since last update, OR
+        # 2. It's past 8 AM and we haven't sent one today
+        hours_since = (now - last_update).total_seconds() / 3600
+        
+        if hours_since >= 24:
+            return True
+        
+        # Check if it's past 8 AM and we haven't sent today
+        if now.hour >= 8 and last_update.date() < now.date():
+            return True
+        
+        return False
+    
+    except Exception as e:
+        logger.warning(f"Error checking status update time: {e}")
+        return True
+
+
+def save_status_update():
+    """Save the timestamp of the last status update"""
+    STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(STATUS_FILE, 'w') as f:
+        json.dump({
+            'last_update': datetime.now().isoformat()
+        }, f, indent=2)
+
+
 def main():
     """Main execution flow"""
     logger.info("Starting Typhoon Monitor Bot...")
@@ -121,6 +166,13 @@ def main():
         
         if not pagasa_data:
             logger.warning("No active typhoon bulletin from PAGASA")
+            
+            # Send daily status update if needed
+            if should_send_status_update():
+                logger.info("Sending daily status update...")
+                notifier.send_status_update()
+                save_status_update()
+            
             return
         
         logger.info(f"Found active cyclone: {pagasa_data.get('name', 'Unknown')}")
@@ -147,6 +199,7 @@ def main():
         bulletin_data = {
             "bulletin_time": pagasa_data.get('bulletin_time'),
             "cyclone_name": pagasa_data.get('name'),
+            "type": pagasa_data.get('type', 'Tropical Cyclone'),
             "location": {
                 "latitude": pagasa_data['latitude'],
                 "longitude": pagasa_data['longitude']
