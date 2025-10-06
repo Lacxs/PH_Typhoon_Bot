@@ -6,7 +6,7 @@ Main orchestrator for PAGASA + JTWC bulletin tracking
 import os
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fetchers.pagasa_parser import PAGASAParser
@@ -20,6 +20,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Philippine timezone (UTC+8)
+PHT = timezone(timedelta(hours=8))
 
 # Port coordinates (latitude, longitude) - Ordered North to South
 PORTS = {
