@@ -63,7 +63,7 @@ def archive_bulletin(bulletin_data):
             archive = json.load(f)
     
     archive.append({
-        "timestamp": datetime.now().isoformat(),
+        "timestamp": datetime.now(PHT).isoformat(),
         "data": bulletin_data
     })
     
@@ -106,7 +106,7 @@ def should_send_alert(current_bulletin, cached_bulletin):
 
 
 def should_send_status_update():
-    """Check if we should send a daily status update (once per day at ~8 AM PHT)"""
+    """Check if we should send status update (twice daily at 7 AM and 7 PM PHT)"""
     if not STATUS_FILE.exists():
         return True
     
@@ -119,19 +119,24 @@ def should_send_status_update():
             return True
         
         last_update = datetime.fromisoformat(last_update_str)
-        now = datetime.now()
+        now = datetime.now(PHT)
         
-        # Send daily update if:
-        # 1. More than 24 hours since last update, OR
-        # 2. It's past 8 AM and we haven't sent one today
+        # Send update if more than 12 hours since last update
         hours_since = (now - last_update).total_seconds() / 3600
-        
-        if hours_since >= 24:
+        if hours_since >= 12:
             return True
         
-        # Check if it's past 8 AM and we haven't sent today
-        if now.hour >= 8 and last_update.date() < now.date():
-            return True
+        # Check if we should send morning report (7 AM)
+        if now.hour >= 7 and now.hour < 19:
+            # Morning window (7 AM - 7 PM)
+            if last_update.date() < now.date() or last_update.hour < 7:
+                return True
+        
+        # Check if we should send evening report (7 PM)
+        if now.hour >= 19:
+            # Evening window (7 PM - midnight)
+            if last_update.hour < 19 or last_update.date() < now.date():
+                return True
         
         return False
     
@@ -145,7 +150,7 @@ def save_status_update():
     STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(STATUS_FILE, 'w') as f:
         json.dump({
-            'last_update': datetime.now().isoformat()
+            'last_update': datetime.now(PHT).isoformat()
         }, f, indent=2)
 
 
