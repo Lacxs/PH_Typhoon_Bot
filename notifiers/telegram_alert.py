@@ -5,9 +5,12 @@ Sends formatted typhoon and LPA alerts to Telegram
 
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+# Philippine timezone (UTC+8)
+PHT = timezone(timedelta(hours=8))
 
 
 class TelegramNotifier:
