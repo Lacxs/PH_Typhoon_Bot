@@ -291,3 +291,17 @@ class TelegramNotifier:
         """Send a test message to verify bot configuration"""
         message = "✅ *Typhoon Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon and LPA alerts here."
         return self._send_message(message)
+    
+    def send_status_update(self):
+        """Send daily status update when no threats exist"""
+        now = datetime.now()
+        date_str = now.strftime("%B %d, %Y")
+        time_str = now.strftime("%I:%M %p")
+        
+        message = f"☀️ *Daily Weather Status*\n"
+        message += f"_{date_str}_\n\n"
+        message += "✅ No tropical cyclones or low pressure areas detected within monitoring range.\n\n"
+        message += "🔍 Bot is actively monitoring PAGASA updates.\n"
+        message += f"🕐 Status as of {time_str} PHT"
+        
+        return self._send_message(message)
