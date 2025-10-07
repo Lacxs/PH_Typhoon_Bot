@@ -72,28 +72,41 @@ class PAGASAParser:
             
             text = response.text
             
-            # Log sample for debugging
-            logger.debug(f"Weather page fetched, length: {len(text)} chars")
-            logger.debug(f"Sample (first 800 chars): {text[:800]}")
+            # Log sample for debugging - USE INFO LEVEL SO WE CAN SEE IT
+            logger.info(f"Weather page fetched, length: {len(text)} chars")
             
-            # Pattern 1: Full format with location reference - FIXED to handle "based on all available"
-            # "the Low Pressure Area (LPA) was estimated based on all available at 90 km East Northeast of Daet, Camarines Norte (14.5°N, 123.7°E)"
-            lpa_pattern1 = r'(?:Low\s+Pressure\s+Area|LPA)[^(]*?(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E\)'
+            # Look specifically for LPA text in the page
+            if 'Low Pressure Area' in text or 'LPA' in text:
+                logger.info("Found 'Low Pressure Area' or 'LPA' text in page!")
+                # Find and log the relevant section
+                lpa_index = text.lower().find('low pressure area')
+                if lpa_index == -1:
+                    lpa_index = text.upper().find('LPA')
+                if lpa_index >= 0:
+                    context_start = max(0, lpa_index - 200)
+                    context_end = min(len(text), lpa_index + 400)
+                    logger.info(f"LPA context from page: {text[context_start:context_end]}")
+            else:
+                logger.warning("No 'Low Pressure Area' or 'LPA' text found in page at all!")
             
-            # Pattern 2: Simpler format with just coordinates
-            # "Low Pressure Area (LPA) at 14.5°N, 123.7°E"
-            lpa_pattern2 = r'(?:Low\s+Pressure\s+Area|LPA)[^(]*?(?:at|near)\s*(\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E'
+            # Pattern 1: Full format - MOST FLEXIBLE VERSION
+            # Matches anything between LPA and the coordinates in parentheses
+            lpa_pattern1 = r'(?:Low\s+Pressure\s+Area|LPA)[^(]{0,300}?(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E\)'
+            
+            # Pattern 2: Just coordinates near LPA mention
+            lpa_pattern2 = r'(?:Low\s+Pressure\s+Area|LPA)[^(]{0,200}?\((\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E\)'
             
             # Pattern 3: Coordinates followed by LPA mention
-            # "14.5°N, 123.7°E ... Low Pressure Area"
-            lpa_pattern3 = r'(\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E[^)]*?(?:Low\s+Pressure\s+Area|LPA)'
+            lpa_pattern3 = r'\((\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E\)[^.]{0,200}?(?:Low\s+Pressure\s+Area|LPA)'
             
             lpas_found = []
             
             # Try Pattern 1 (most detailed)
-            logger.debug("Trying Pattern 1 (detailed with location)...")
+            logger.info("Trying Pattern 1 (detailed with location)...")
             matches = re.finditer(lpa_pattern1, text, re.IGNORECASE | re.DOTALL)
+            match_count = 0
             for match in matches:
+                match_count += 1
                 try:
                     distance = match.group(1)
                     direction = match.group(2).strip()
@@ -101,7 +114,7 @@ class PAGASAParser:
                     lat = float(match.group(4))
                     lon = float(match.group(5))
                     
-                    logger.debug(f"Pattern 1 match: {distance}km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                    logger.info(f"Pattern 1 match #{match_count}: {distance}km {direction} of {location_name} ({lat}°N, {lon}°E)")
                     
                     # Validate coordinates
                     if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
@@ -113,23 +126,28 @@ class PAGASAParser:
                             'longitude': lon,
                             'pattern': 1
                         })
-                        logger.info(f"✓ Found LPA (Pattern 1): {distance} km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                        logger.info(f"✓ Valid LPA found (Pattern 1): {distance} km {direction} of {location_name} ({lat}°N, {lon}°E)")
                     else:
                         logger.warning(f"Coordinates outside valid range: {lat}°N, {lon}°E")
                 except (ValueError, IndexError) as e:
-                    logger.debug(f"Error parsing Pattern 1 match: {e}")
+                    logger.warning(f"Error parsing Pattern 1 match #{match_count}: {e}")
                     continue
+            
+            if match_count == 0:
+                logger.info("Pattern 1 found 0 matches")
             
             # Try Pattern 2 if no results yet
             if not lpas_found:
-                logger.debug("Trying Pattern 2 (simple with coordinates)...")
+                logger.info("Trying Pattern 2 (simple with coordinates)...")
                 matches = re.finditer(lpa_pattern2, text, re.IGNORECASE | re.DOTALL)
+                match_count = 0
                 for match in matches:
+                    match_count += 1
                     try:
                         lat = float(match.group(1))
                         lon = float(match.group(2))
                         
-                        logger.debug(f"Pattern 2 match: ({lat}°N, {lon}°E)")
+                        logger.info(f"Pattern 2 match #{match_count}: ({lat}°N, {lon}°E)")
                         
                         if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
                             lpas_found.append({
@@ -140,21 +158,26 @@ class PAGASAParser:
                                 'longitude': lon,
                                 'pattern': 2
                             })
-                            logger.info(f"✓ Found LPA (Pattern 2): ({lat}°N, {lon}°E)")
+                            logger.info(f"✓ Valid LPA found (Pattern 2): ({lat}°N, {lon}°E)")
                     except (ValueError, IndexError) as e:
-                        logger.debug(f"Error parsing Pattern 2 match: {e}")
+                        logger.warning(f"Error parsing Pattern 2 match #{match_count}: {e}")
                         continue
+                
+                if match_count == 0:
+                    logger.info("Pattern 2 found 0 matches")
             
             # Try Pattern 3 if still no results
             if not lpas_found:
-                logger.debug("Trying Pattern 3 (coordinates before LPA mention)...")
+                logger.info("Trying Pattern 3 (coordinates before LPA mention)...")
                 matches = re.finditer(lpa_pattern3, text, re.IGNORECASE | re.DOTALL)
+                match_count = 0
                 for match in matches:
+                    match_count += 1
                     try:
                         lat = float(match.group(1))
                         lon = float(match.group(2))
                         
-                        logger.debug(f"Pattern 3 match: ({lat}°N, {lon}°E)")
+                        logger.info(f"Pattern 3 match #{match_count}: ({lat}°N, {lon}°E)")
                         
                         if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
                             lpas_found.append({
@@ -165,17 +188,20 @@ class PAGASAParser:
                                 'longitude': lon,
                                 'pattern': 3
                             })
-                            logger.info(f"✓ Found LPA (Pattern 3): ({lat}°N, {lon}°E)")
+                            logger.info(f"✓ Valid LPA found (Pattern 3): ({lat}°N, {lon}°E)")
                     except (ValueError, IndexError) as e:
-                        logger.debug(f"Error parsing Pattern 3 match: {e}")
+                        logger.warning(f"Error parsing Pattern 3 match #{match_count}: {e}")
                         continue
+                
+                if match_count == 0:
+                    logger.info("Pattern 3 found 0 matches")
             
             if lpas_found:
                 # Return the first (usually most significant) LPA
                 lpa = lpas_found[0]
                 description = f"{lpa['distance']} km {lpa['direction']} of {lpa['location_name']}" if lpa['distance'] else f"at {lpa['latitude']}°N, {lpa['longitude']}°E"
                 
-                logger.info(f"Total LPAs found: {len(lpas_found)}")
+                logger.info(f"SUCCESS! Total LPAs found: {len(lpas_found)}")
                 
                 return {
                     'source': 'weather_page',
@@ -194,11 +220,11 @@ class PAGASAParser:
                     'additional_lpas': lpas_found[1:] if len(lpas_found) > 1 else []
                 }
             
-            logger.info("No LPA found on weather page")
+            logger.warning("No LPA found on weather page after trying all patterns")
             return None
         
         except Exception as e:
-            logger.warning(f"Weather page LPA check failed: {e}", exc_info=True)
+            logger.error(f"Weather page LPA check failed: {e}", exc_info=True)
             return None
     
     def _check_tropical_cyclone(self):
