@@ -128,9 +128,12 @@ def _format_typhoon_message(self, data):
         timestamp = datetime.now(PHT).strftime("%Y-%m-%d %H:%M PHT")
         message += f"\n*Updated:* {timestamp}"
         
-return message
-    
     def _format_port_status_professional(self, port_name, status):
+        """Format individual port status line - Professional style for Option B"""
+        tcws = status.get('tcws')
+        eta = status.get('eta_hours')
+        distance = status.get('distance_km')
+        in_proximity = status.get('in_proximity', False)
         
         # Determine status icon and text
         if tcws and tcws >= 3:
