@@ -84,22 +84,28 @@ class PAGASAParser:
             
             # First pass: look for the TC name/type in ALL table text
             all_table_text = table.get_text()
-            logger.info(f"Full table text: {all_table_text[:500]}")
+            logger.info(f"Full table text (first 300 chars): {all_table_text[:300]}")
             
-            # Extract category from table text
+            # Extract category from table text - CHECK IN ORDER OF SPECIFICITY
             if 'SUPER TYPHOON' in all_table_text.upper():
                 tc_data['category'] = 'Super Typhoon'
-            elif 'TYPHOON' in all_table_text.upper():
-                tc_data['category'] = 'Typhoon'
             elif 'SEVERE TROPICAL STORM' in all_table_text.upper():
                 tc_data['category'] = 'Severe Tropical Storm'
             elif 'TROPICAL STORM' in all_table_text.upper():
                 tc_data['category'] = 'Tropical Storm'
             elif 'TROPICAL DEPRESSION' in all_table_text.upper():
                 tc_data['category'] = 'Tropical Depression'
+            elif 'TYPHOON' in all_table_text.upper():
+                tc_data['category'] = 'Typhoon'
+            else:
+                # Fallback
+                tc_data['category'] = 'Tropical Cyclone'
             
-            # Check if outside PAR
+            logger.info(f"Detected category: {tc_data['category']}")
+            
+            # Check if outside PAR (this is a LOCATION, not a category)
             is_outside_par = 'OUTSIDE PAR' in all_table_text.upper()
+            logger.info(f"Outside PAR: {is_outside_par}")
             
             # Try to extract Philippine name (in quotes or parentheses)
             name_match = re.search(r'["\']([A-Z][a-z]+)["\']|\(([A-Z][a-z]+)\)', all_table_text)
