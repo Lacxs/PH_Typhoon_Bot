@@ -2,6 +2,7 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,84 @@ class PAGASAParser:
         except Exception as e:
             logger.error(f"Error fetching threat forecast: {e}")
             return None
+    
+    # COMPATIBILITY METHOD - for backwards compatibility with existing main.py
+    def fetch_latest_bulletin(self):
+        """
+        Compatibility wrapper for fetch_weather_data()
+        Returns data in the format expected by main.py
+        """
+        logger.info("fetch_latest_bulletin() called")
+        raw_data = self.fetch_weather_data()
+        
+        if not raw_data:
+            return None
+        
+        # Convert to the format main.py expects
+        bulletin_data = {
+            'name': raw_data.get('name', 'Unknown'),
+            'latitude': raw_data.get('lat'),
+            'longitude': raw_data.get('lon'),
+            'bulletin_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'type': raw_data.get('category', 'Tropical Cyclone'),
+            'movement_direction': None,
+            'movement_speed': None,
+            'max_winds': raw_data.get('max_winds'),
+            'max_gusts': raw_data.get('gustiness'),
+            'tcws_areas': {},
+            'next_bulletin': None
+        }
+        
+        # Parse movement if available (e.g., "NORTHWESTWARD AT 35 KM/H")
+        movement = raw_data.get('movement', '')
+        if movement:
+            # Extract direction
+            direction_match = re.search(r'(NORTH|SOUTH|EAST|WEST|NORTHWEST|NORTHEAST|SOUTHWEST|SOUTHEAST)(?:WARD)?', movement, re.I)
+            if direction_match:
+                bulletin_data['movement_direction'] = direction_match.group(1).upper()
+            
+            # Extract speed
+            speed_match = re.search(r'(\d+)\s*KM/H', movement, re.I)
+            if speed_match:
+                bulletin_data['movement_speed'] = int(speed_match.group(1))
+        
+        return bulletin_data
+    
+    def get_bulletin_text(self):
+        """
+        Return a text summary of the current weather situation
+        Compatible with old code that expects bulletin text
+        """
+        data = self.fetch_weather_data()
+        
+        if not data:
+            return "No active tropical cyclone or low pressure area"
+        
+        # Format the data as text
+        text_parts = []
+        
+        if data.get('name'):
+            text_parts.append(f"Name: {data['name']}")
+        
+        if data.get('category'):
+            text_parts.append(f"Category: {data['category']}")
+        
+        if data.get('location'):
+            text_parts.append(f"Location: {data['location']}")
+        
+        if data.get('lat') and data.get('lon'):
+            text_parts.append(f"Coordinates: {data['lat']}°N, {data['lon']}°E")
+        
+        if data.get('max_winds'):
+            text_parts.append(f"Max Winds: {data['max_winds']} km/h")
+        
+        if data.get('gustiness'):
+            text_parts.append(f"Gustiness: {data['gustiness']} km/h")
+        
+        if data.get('movement'):
+            text_parts.append(f"Movement: {data['movement']}")
+        
+        return "\n".join(text_parts)
 
 
 # Usage example
@@ -205,9 +284,19 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     parser = PAGASAParser()
-    data = parser.fetch_weather_data()
     
+    # Test new method
+    data = parser.fetch_weather_data()
     if data:
         print(f"Found weather system: {data}")
     else:
         print("No active weather system")
+    
+    # Test compatibility method
+    print("\n--- Testing compatibility method ---")
+    bulletin = parser.fetch_latest_bulletin()
+    print(bulletin)
+    
+    print("\n--- Testing bulletin text ---")
+    text = parser.get_bulletin_text()
+    print(text)
