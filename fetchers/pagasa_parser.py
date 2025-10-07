@@ -82,29 +82,51 @@ class PAGASAParser:
                 'category': None
             }
             
+            # First pass: look for the TC name/type in ALL table text
+            all_table_text = table.get_text()
+            logger.info(f"Full table text: {all_table_text[:500]}")
+            
+            # Extract category from table text
+            if 'SUPER TYPHOON' in all_table_text.upper():
+                tc_data['category'] = 'Super Typhoon'
+            elif 'TYPHOON' in all_table_text.upper():
+                tc_data['category'] = 'Typhoon'
+            elif 'SEVERE TROPICAL STORM' in all_table_text.upper():
+                tc_data['category'] = 'Severe Tropical Storm'
+            elif 'TROPICAL STORM' in all_table_text.upper():
+                tc_data['category'] = 'Tropical Storm'
+            elif 'TROPICAL DEPRESSION' in all_table_text.upper():
+                tc_data['category'] = 'Tropical Depression'
+            
+            # Check if outside PAR
+            is_outside_par = 'OUTSIDE PAR' in all_table_text.upper()
+            
+            # Try to extract Philippine name (in quotes or parentheses)
+            name_match = re.search(r'["\']([A-Z][a-z]+)["\']|\(([A-Z][a-z]+)\)', all_table_text)
+            if name_match:
+                tc_data['name'] = name_match.group(1) or name_match.group(2)
+                logger.info(f"Found TC name: {tc_data['name']}")
+            else:
+                # No Philippine name - use category with location context
+                if is_outside_par and tc_data['category']:
+                    tc_data['name'] = f"{tc_data['category']} (Outside PAR)"
+                elif tc_data['category']:
+                    tc_data['name'] = tc_data['category']
+                else:
+                    tc_data['name'] = 'Unknown System'
+                logger.info(f"No proper name found, using: {tc_data['name']}")
+            
+            logger.info(f"Extracted category: {tc_data['category']}, name: {tc_data['name']}")
+            
+            # Second pass: parse individual data rows
             for row in rows:
                 cells = row.find_all('td')
                 if not cells:
                     continue
                 
                 text = ' '.join(cell.get_text(strip=True) for cell in cells)
-                logger.debug(f"Processing row: {text}")
                 
-                # Parse different fields
-                if 'TROPICAL CYCLONE' in text.upper() or 'TROPICAL DEPRESSION' in text.upper():
-                    # Extract TC category and name
-                    if 'OUTSIDE PAR' in text.upper():
-                        tc_data['category'] = 'OUTSIDE PAR'
-                    
-                    # Try to extract name (usually in parentheses or quotes)
-                    name_match = re.search(r'["\']([A-Z]+)["\']|\(([A-Z]+)\)', text)
-                    if name_match:
-                        tc_data['name'] = name_match.group(1) or name_match.group(2)
-                
-                elif 'TROPICAL DEPRESSION' in text.upper():
-                    tc_data['category'] = 'TROPICAL DEPRESSION'
-                
-                elif 'LOCATION:' in text.upper():
+                if 'LOCATION:' in text.upper():
                     # Extract coordinates
                     coord_match = re.search(r'(\d+\.?\d*)\s*°?\s*([NS])\s*,?\s*(\d+\.?\d*)\s*°?\s*([EW])', text)
                     if coord_match:
@@ -212,13 +234,27 @@ class PAGASAParser:
         if not raw_data:
             return None
         
+        # Get the proper system name and type
+        system_name = raw_data.get('name', 'Unknown System')
+        system_category = raw_data.get('category', 'Tropical Cyclone')
+        
+        # If no proper name, use the category as the name
+        if not system_name or system_name.lower() in ['none', 'unknown']:
+            system_name = system_category
+        
+        # Determine the type description
+        if 'outside par' in system_category.lower():
+            type_desc = f"{system_category}"
+        else:
+            type_desc = system_category
+        
         # Convert to the format main.py expects
         bulletin_data = {
-            'name': raw_data.get('name', 'Unknown'),
+            'name': system_name,
             'latitude': raw_data.get('lat'),
             'longitude': raw_data.get('lon'),
             'bulletin_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'type': raw_data.get('category', 'Tropical Cyclone'),
+            'type': type_desc,
             'movement_direction': None,
             'movement_speed': None,
             'max_winds': raw_data.get('max_winds'),
@@ -239,6 +275,8 @@ class PAGASAParser:
             speed_match = re.search(r'(\d+)\s*KM/H', movement, re.I)
             if speed_match:
                 bulletin_data['movement_speed'] = int(speed_match.group(1))
+        
+        logger.info(f"Bulletin data prepared: name={bulletin_data['name']}, type={bulletin_data['type']}, lat={bulletin_data['latitude']}, lon={bulletin_data['longitude']}")
         
         return bulletin_data
     
