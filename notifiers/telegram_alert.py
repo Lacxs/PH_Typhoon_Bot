@@ -137,7 +137,7 @@ class TelegramNotifier:
     
     def send_alert(self, bulletin_data):
         """
-        Send formatted weather alert with optional map
+        Send formatted weather alert (text only, map disabled)
         
         Args:
             bulletin_data: Dict containing bulletin information
@@ -146,18 +146,11 @@ class TelegramNotifier:
         
         if system_type == 'Low Pressure Area':
             message = self._format_lpa_message(bulletin_data)
-            return self._send_message(message)
         else:
             message = self._format_typhoon_message(bulletin_data)
-            
-            # Try to create and send map
-            map_image = create_storm_map(bulletin_data)
-            if map_image:
-                self._send_photo(map_image, caption=message)
-            else:
-                self._send_message(message)
-            
-            return True
+        
+        # Send text-only message (map disabled)
+        return self._send_message(message)
     
     def send_error_notification(self, error_message):
         """Send error notification to admin"""
@@ -238,18 +231,22 @@ class TelegramNotifier:
         # === HEADER ===
         message = f"{emoji} *PAGASA WEATHER BULLETIN*\n\n"
         
-        # System name and type
-        if cyclone_name and cyclone_name.lower() not in ['unknown', 'none']:
-            message += f"*System:* {cyclone_name}\n"
+        # System name and classification
+        if cyclone_name and cyclone_name.lower() not in ['unknown', 'none', 'tropical depression', 'tropical storm']:
+            # Has a proper name (like "Paolo")
+            message += f"*Name:* {cyclone_name}\n"
+            message += f"*Classification:* {system_type}\n"
         else:
+            # No proper name, just show classification
             message += f"*System:* {system_type}\n"
         
-        message += f"*Type:* {system_type}\n"
-        
+        # Status line
         if is_outside_par:
-            message += f"*Status:* Being monitored (Outside PAR)\n"
+            message += f"*Location:* Outside Philippine Area of Responsibility\n"
+            message += f"*Status:* Being monitored\n"
         else:
-            message += f"*Status:* Active within Philippine Area of Responsibility\n"
+            message += f"*Location:* Within Philippine Area of Responsibility\n"
+            message += f"*Status:* Active\n"
         
         # === CURRENT DATA SECTION ===
         message += f"\n📊 *CURRENT DATA*\n"
