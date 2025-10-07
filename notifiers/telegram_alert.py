@@ -137,7 +137,7 @@ class TelegramNotifier:
     
     def send_alert(self, bulletin_data):
         """
-        Send formatted weather alert
+        Send formatted weather alert with optional map
         
         Args:
             bulletin_data: Dict containing bulletin information
@@ -146,10 +146,18 @@ class TelegramNotifier:
         
         if system_type == 'Low Pressure Area':
             message = self._format_lpa_message(bulletin_data)
+            return self._send_message(message)
         else:
             message = self._format_typhoon_message(bulletin_data)
-        
-        return self._send_message(message)
+            
+            # Try to create and send map
+            map_image = create_storm_map(bulletin_data)
+            if map_image:
+                self._send_photo(map_image, caption=message)
+            else:
+                self._send_message(message)
+            
+            return True
     
     def send_error_notification(self, error_message):
         """Send error notification to admin"""
@@ -248,6 +256,11 @@ class TelegramNotifier:
             status = port_status[port_name]
             message += self._format_port_status(port_name, status)
         
+        # Action recommendations based on highest TCWS
+        recommendations = self._get_action_recommendations(port_status)
+        if recommendations:
+            message += f"\n⚠️ *Recommended Actions:*\n{recommendations}\n"
+        
         # Footer
         next_bulletin = data.get('next_bulletin')
         if next_bulletin:
@@ -324,20 +337,56 @@ class TelegramNotifier:
         else:
             line += " – No signal"
         
-        # ETA
+        # ETA with specific arrival time
         if eta:
+            now = datetime.now(PHT)
+            arrival_time = now + timedelta(hours=eta)
+            
             if eta < 1:
-                line += f" (~{int(eta * 60)} min ETA)"
+                line += f" (~{int(eta * 60)} min)"
             else:
-                line += f" (~{int(eta)} h ETA)"
+                line += f" (~{int(eta)}h)"
+            
+            # Add specific arrival time
+            arrival_str = arrival_time.strftime("%b %d, %I:%M %p")
+            line += f"\n    ↳ Est. arrival: {arrival_str} PHT"
         
         # Distance if not under signal
-        if not tcws and distance:
+        elif not tcws and distance:
             line += f" ({int(distance)} km away)"
         
         line += "\n"
         
         return line
+    
+    def _get_action_recommendations(self, port_status):
+        """Generate action recommendations based on TCWS levels"""
+        # Find highest TCWS level
+        max_tcws = 0
+        affected_ports = []
+        
+        for port_name, status in port_status.items():
+            tcws = status.get('tcws')
+            if tcws:
+                if tcws > max_tcws:
+                    max_tcws = tcws
+                    affected_ports = [port_name]
+                elif tcws == max_tcws:
+                    affected_ports.append(port_name)
+        
+        if max_tcws == 0:
+            return None
+        
+        recommendations = {
+            1: "• Monitor weather updates closely\n• Prepare to secure loose equipment\n• Review emergency procedures\n• Maintain normal operations with caution",
+            2: "• Secure all containers and equipment\n• Restrict non-essential operations\n• Prepare evacuation plans\n• Stock emergency supplies\n• Brief all personnel on storm procedures",
+            3: "• CEASE OPERATIONS IMMEDIATELY\n• Evacuate non-essential personnel\n• Secure all assets and facilities\n• Activate emergency response team\n• Monitor communications continuously",
+            4: "• FULL EVACUATION - CRITICAL THREAT\n• All personnel to safe locations\n• Complete operational shutdown\n• Activate disaster response protocols\n• Prepare for significant damage assessment",
+            5: "• EXTREME DANGER - CATASTROPHIC CONDITIONS\n• Complete evacuation mandatory\n• Take shelter in reinforced structures\n• Expect widespread severe damage\n• Emergency services may be unavailable"
+        }
+        
+        ports_str = ", ".join(affected_ports)
+        return f"*TCWS #{max_tcws}* at {ports_str}:\n{recommendations.get(max_tcws, '')}"
     
     def _format_port_distance(self, port_name, status):
         """Format port distance line (for LPAs)"""
@@ -396,6 +445,47 @@ class TelegramNotifier:
         except Exception as e:
             logger.error(f"Failed to send Telegram message: {e}")
             return False
+    
+    def _send_photo(self, photo_bytes, caption):
+        """
+        Send photo with caption to Telegram
+        
+        Args:
+            photo_bytes: Image bytes
+            caption: Photo caption (Markdown formatted)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/sendPhoto"
+            
+            files = {
+                'photo': ('storm_map.png', photo_bytes, 'image/png')
+            }
+            
+            data = {
+                'chat_id': self.chat_id,
+                'caption': caption,
+                'parse_mode': 'Markdown'
+            }
+            
+            response = requests.post(url, files=files, data=data, timeout=30)
+            response.raise_for_status()
+            
+            result = response.json()
+            
+            if result.get('ok'):
+                logger.info("Telegram photo sent successfully")
+                return True
+            else:
+                logger.error(f"Telegram API error: {result}")
+                return False
+        
+        except Exception as e:
+            logger.error(f"Failed to send Telegram photo: {e}")
+            # Fallback to text-only message
+            return self._send_message(caption)
     
     def send_test_message(self):
         """Send a test message to verify bot configuration"""
