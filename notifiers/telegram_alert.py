@@ -5,12 +5,119 @@ Sends formatted typhoon and LPA alerts to Telegram
 
 import logging
 import requests
+import io
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
 # Philippine timezone (UTC+8)
 PHT = timezone(timedelta(hours=8))
+
+
+def create_storm_map(bulletin_data):
+    """
+    Create a simple storm track map showing typhoon position and terminals
+    Returns image bytes for Telegram
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import Circle
+        import numpy as np
+        
+        location = bulletin_data.get('location', {})
+        storm_lat = location.get('latitude')
+        storm_lon = location.get('longitude')
+        
+        if not storm_lat or not storm_lon:
+            return None
+        
+        # Port coordinates
+        ports = {
+            "SBITC": (14.8045, 120.2663),
+            "MICT": (14.6036, 120.9466),
+            "Bauan": (13.7823, 120.9895),
+            "VCT": (10.7064, 122.5947),
+            "MICTSI": (8.5533, 124.7667)
+        }
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Plot Philippines outline (simplified box)
+        phil_lat = [5, 5, 21, 21, 5]
+        phil_lon = [116, 127, 127, 116, 116]
+        ax.plot(phil_lon, phil_lat, 'k-', linewidth=2, alpha=0.3)
+        
+        # Plot 700km monitoring circle
+        circle = Circle((storm_lon, storm_lat), 700/111, fill=False, 
+                       edgecolor='orange', linestyle='--', linewidth=2, alpha=0.5)
+        ax.add_patch(circle)
+        
+        # Plot storm position
+        ax.plot(storm_lon, storm_lat, 'r*', markersize=30, 
+               label=f"{bulletin_data.get('cyclone_name', 'Storm')}")
+        
+        # Plot terminals
+        port_status = bulletin_data.get('port_status', {})
+        for port_name, (lat, lon) in ports.items():
+            status = port_status.get(port_name, {})
+            tcws = status.get('tcws')
+            
+            # Color based on threat level
+            if tcws and tcws >= 3:
+                color = 'red'
+                marker = 's'
+                size = 200
+            elif tcws and tcws >= 1:
+                color = 'orange'
+                marker = 's'
+                size = 150
+            elif status.get('in_proximity'):
+                color = 'yellow'
+                marker = 'o'
+                size = 100
+            else:
+                color = 'green'
+                marker = 'o'
+                size = 80
+            
+            ax.scatter(lon, lat, c=color, marker=marker, s=size, 
+                      edgecolors='black', linewidths=1.5, zorder=5)
+            ax.text(lon, lat-0.3, port_name, ha='center', fontsize=9, 
+                   fontweight='bold')
+        
+        # Labels and title
+        cyclone_name = bulletin_data.get('cyclone_name', 'Storm')
+        ax.set_title(f'Typhoon {cyclone_name} - ICTSI Terminal Monitoring', 
+                    fontsize=14, fontweight='bold')
+        ax.set_xlabel('Longitude', fontsize=11)
+        ax.set_ylabel('Latitude', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc='upper right')
+        
+        # Set bounds to show relevant area
+        all_lons = [lon for _, (_, lon) in ports.items()] + [storm_lon]
+        all_lats = [lat for _, (lat, _) in ports.items()] + [storm_lat]
+        
+        lon_margin = 2
+        lat_margin = 2
+        ax.set_xlim(min(all_lons) - lon_margin, max(all_lons) + lon_margin)
+        ax.set_ylim(min(all_lats) - lat_margin, max(all_lats) + lat_margin)
+        
+        # Save to bytes
+        buf = io.BytesIO()
+        plt.tight_layout()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf.getvalue()
+    
+    except Exception as e:
+        logger.error(f"Failed to create storm map: {e}")
+        return None
 
 
 class TelegramNotifier:
