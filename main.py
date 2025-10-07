@@ -36,6 +36,59 @@ PORTS = {
 CACHE_FILE = Path("data/last_bulletin.json")
 ARCHIVE_FILE = Path("data/bulletin_archive.json")
 STATUS_FILE = Path("data/last_status_update.json")
+THREAT_FILE = Path("data/last_threat_detected.json")
+
+
+def check_threat_level(port_status):
+    """Determine if there's an elevated threat requiring hourly monitoring"""
+    for port, status in port_status.items():
+        tcws = status.get('tcws')
+        # TCWS #2 or higher = elevated threat
+        if tcws and tcws >= 2:
+            return True
+    return False
+
+
+def save_threat_status(has_threat):
+    """Save whether an elevated threat currently exists"""
+    THREAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(THREAT_FILE, 'w') as f:
+        json.dump({
+            'has_elevated_threat': has_threat,
+            'last_check': datetime.now(PHT).isoformat()
+        }, f, indent=2)
+
+
+def should_skip_run():
+    """
+    Check if we should skip this run (to implement adaptive frequency).
+    Returns True if we should skip (no elevated threat and odd hour).
+    """
+    # Always run on even hours (0, 2, 4, 6, 8, 10, etc.)
+    now = datetime.now(PHT)
+    if now.hour % 2 == 0:
+        return False
+    
+    # On odd hours, only run if there's an elevated threat
+    if not THREAT_FILE.exists():
+        return True  # Skip odd hour runs if no threat data
+    
+    try:
+        with open(THREAT_FILE, 'r') as f:
+            threat_data = json.load(f)
+        
+        has_threat = threat_data.get('has_elevated_threat', False)
+        
+        # If elevated threat exists, run every hour
+        if has_threat:
+            return False
+        
+        # No threat, skip odd hour runs
+        return True
+    
+    except Exception as e:
+        logger.warning(f"Error reading threat status: {e}")
+        return True  # Skip on error to be safe
 
 
 def load_cache():
@@ -158,6 +211,11 @@ def main():
     """Main execution flow"""
     logger.info("Starting Typhoon Monitor Bot...")
     
+    # Check if we should skip this run (adaptive frequency)
+    if should_skip_run():
+        logger.info("Skipping run - no elevated threat detected, running on 2-hour schedule")
+        return
+    
     # Check if manual status report was requested
     force_status = os.getenv("FORCE_STATUS_REPORT", "false").lower() == "true"
     
@@ -177,6 +235,9 @@ def main():
         
         if not pagasa_data:
             logger.warning("No active typhoon bulletin from PAGASA")
+            
+            # Clear elevated threat status
+            save_threat_status(False)
             
             # Send status update if scheduled OR manually forced
             if should_send_status_update() or force_status:
@@ -229,6 +290,13 @@ def main():
             "next_bulletin": pagasa_data.get('next_bulletin'),
             "jtwc_available": jtwc_data is not None
         }
+        
+        # Check and save threat level
+        has_elevated_threat = check_threat_level(port_status)
+        save_threat_status(has_elevated_threat)
+        
+        if has_elevated_threat:
+            logger.info("Elevated threat detected (TCWS #2+) - hourly monitoring activated")
         
         # Check if we should send alert
         cached = load_cache()
