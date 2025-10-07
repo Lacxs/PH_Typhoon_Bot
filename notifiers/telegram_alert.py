@@ -232,13 +232,13 @@ class TelegramNotifier:
         message = f"{emoji} *PAGASA WEATHER BULLETIN*\n\n"
         
         # System name and classification
-        if cyclone_name and cyclone_name.lower() not in ['unknown', 'none', 'tropical depression', 'tropical storm']:
-            # Has a proper name (like "Paolo")
+        if cyclone_name and cyclone_name.lower() not in ['unknown', 'none'] and '(outside par)' not in cyclone_name.lower() and cyclone_name.lower() != system_type.lower():
+            # Has a proper Philippine name (like "Paolo", "Kristine", etc.)
             message += f"*Name:* {cyclone_name}\n"
             message += f"*Classification:* {system_type}\n"
         else:
             # No proper name, just show classification
-            message += f"*System:* {system_type}\n"
+            message += f"*Classification:* {system_type}\n"
         
         # Status line
         if is_outside_par:
@@ -246,7 +246,7 @@ class TelegramNotifier:
             message += f"*Status:* Being monitored\n"
         else:
             message += f"*Location:* Within Philippine Area of Responsibility\n"
-            message += f"*Status:* Active\n"
+            message += f"*Status:* Active threat\n"
         
         # === CURRENT DATA SECTION ===
         message += f"\n📊 *CURRENT DATA*\n"
