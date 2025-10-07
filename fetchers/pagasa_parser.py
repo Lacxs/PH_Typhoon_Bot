@@ -1,6 +1,6 @@
 """
 PAGASA Severe Weather Bulletin Parser - ENHANCED VERSION
-Better support for real metafile format and LPA detection from /weather page
+Better support for real metafile format and LPA detection from PDF
 """
 
 import re
@@ -8,6 +8,12 @@ import logging
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
+try:
+    import PyPDF2
+    HAS_PDF_SUPPORT = True
+except ImportError:
+    HAS_PDF_SUPPORT = False
+    logging.warning("PyPDF2 not installed - PDF parsing disabled")
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +26,20 @@ class PAGASAParser:
     PAGASA_WEATHER_URL = "https://www.pagasa.dost.gov.ph/weather"
     PAGASA_LPA_URL = "https://www.pagasa.dost.gov.ph/tropical-cyclone"
     PAGASA_THREAT_URL = "https://www.pagasa.dost.gov.ph/tropical-cyclone/tc-threat-potential-forecast"
+    PAGASA_PDF_URL = "https://pubfiles.pagasa.dost.gov.ph/tamss/weather/pf.pdf"  # NEW: PDF source
     
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1'
         })
+        self.logger = logging.getLogger(__name__)
     
     def fetch_latest_bulletin(self):
         """
@@ -40,14 +54,20 @@ class PAGASAParser:
                 logger.info(f"✓ Found TC with coordinates: {data.get('name')}")
                 return data
             
-            # Priority 2: Check main weather page for LPAs (most reliable)
-            logger.info("No valid TC data, checking for LPAs...")
+            # Priority 2: Check PDF bulletin for LPAs (MOST RELIABLE!)
+            logger.info("No valid TC data, checking PDF bulletin for LPAs...")
+            lpa_data = self._check_pdf_bulletin()
+            if lpa_data:
+                logger.info(f"✓ Found LPA from PDF bulletin")
+                return lpa_data
+            
+            # Priority 3: Check main weather page for LPAs (may not work due to JS)
             lpa_data = self._check_weather_page_lpa()
             if lpa_data:
                 logger.info(f"✓ Found LPA from weather page")
                 return lpa_data
             
-            # Priority 3: Check other pages for LPAs (fallback)
+            # Priority 4: Check other pages for LPAs (fallback)
             lpa_data = self._check_low_pressure_area()
             if lpa_data:
                 logger.info(f"✓ Found LPA from fallback check")
@@ -58,6 +78,183 @@ class PAGASAParser:
         
         except Exception as e:
             logger.error(f"Error fetching PAGASA bulletin: {e}", exc_info=True)
+            return None
+    
+    def _check_pdf_bulletin(self):
+        """
+        Check the PAGASA PDF bulletin for LPAs - MOST RELIABLE METHOD
+        The PDF at pubfiles.pagasa.dost.gov.ph/tamss/weather/pf.pdf contains the official forecast
+        """
+        if not HAS_PDF_SUPPORT:
+            logger.warning("PyPDF2 not available, skipping PDF check")
+            return None
+        
+        try:
+            import io
+            logger.info("Fetching PDF bulletin from PAGASA...")
+            
+            response = self.session.get(self.PAGASA_PDF_URL, timeout=20)
+            response.raise_for_status()
+            
+            logger.info(f"PDF downloaded, size: {len(response.content)} bytes")
+            
+            # Read PDF from memory
+            pdf_file = io.BytesIO(response.content)
+            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            
+            # Extract text from all pages
+            text = ""
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                text += page_text + "\n"
+                logger.debug(f"Extracted page {page_num + 1}, length: {len(page_text)} chars")
+            
+            logger.info(f"Total extracted text length: {len(text)} chars")
+            
+            # Check if there's an LPA mentioned
+            if 'low pressure area' in text.lower() or 'lpa' in text.lower():
+                logger.info("Found 'Low Pressure Area' or 'LPA' in PDF!")
+                
+                # Log context for debugging
+                lpa_index = text.lower().find('low pressure area')
+                if lpa_index == -1:
+                    lpa_index = text.lower().find('lpa')
+                if lpa_index >= 0:
+                    context_start = max(0, lpa_index - 300)
+                    context_end = min(len(text), lpa_index + 500)
+                    logger.info(f"LPA context from PDF: {text[context_start:context_end]}")
+                
+                # Parse LPA data from PDF text
+                return self._parse_lpa_from_pdf_text(text)
+            else:
+                logger.info("No LPA found in PDF bulletin")
+                return None
+                
+        except Exception as e:
+            logger.error(f"PDF bulletin check failed: {e}", exc_info=True)
+            return None
+    
+    def _parse_lpa_from_pdf_text(self, text):
+        """Parse LPA information from PDF text"""
+        try:
+            # Multiple patterns to match LPA coordinates
+            lpa_patterns = [
+                # Pattern 1: "Low Pressure Area (LPA) was estimated based on all available at 90 km East Northeast of Daet, Camarines Norte (14.5°N, 123.7°E)"
+                r'(?:Low\s+Pressure\s+Area|LPA)[^(]{0,400}?(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E\)',
+                # Pattern 2: "Low Pressure Area (LPA) was estimated ... at (14.5°N, 123.7°E)"
+                r'(?:Low\s+Pressure\s+Area|LPA)[^(]{0,300}?\((\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E\)',
+                # Pattern 3: Just coordinates near LPA
+                r'(\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E[^.]{0,100}?(?:Low\s+Pressure\s+Area|LPA)',
+            ]
+            
+            lpas_found = []
+            
+            # Try Pattern 1 (most detailed with location)
+            logger.info("Trying PDF Pattern 1 (with location)...")
+            matches = re.finditer(lpa_patterns[0], text, re.IGNORECASE | re.DOTALL)
+            for match in matches:
+                try:
+                    distance = match.group(1)
+                    direction = match.group(2).strip()
+                    location_name = match.group(3).strip()
+                    lat = float(match.group(4))
+                    lon = float(match.group(5))
+                    
+                    logger.info(f"PDF Pattern 1 match: {distance}km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                    
+                    if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                        lpas_found.append({
+                            'distance': distance,
+                            'direction': direction,
+                            'location_name': location_name,
+                            'latitude': lat,
+                            'longitude': lon,
+                            'pattern': 1
+                        })
+                        logger.info(f"✓ Valid LPA from PDF: {distance} km {direction} of {location_name}")
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Error parsing PDF Pattern 1: {e}")
+                    continue
+            
+            # Try Pattern 2 if no results
+            if not lpas_found:
+                logger.info("Trying PDF Pattern 2 (coordinates only)...")
+                matches = re.finditer(lpa_patterns[1], text, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    try:
+                        lat = float(match.group(1))
+                        lon = float(match.group(2))
+                        
+                        logger.info(f"PDF Pattern 2 match: ({lat}°N, {lon}°E)")
+                        
+                        if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                            lpas_found.append({
+                                'distance': None,
+                                'direction': None,
+                                'location_name': 'Philippine Area of Responsibility',
+                                'latitude': lat,
+                                'longitude': lon,
+                                'pattern': 2
+                            })
+                            logger.info(f"✓ Valid LPA from PDF: ({lat}°N, {lon}°E)")
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing PDF Pattern 2: {e}")
+                        continue
+            
+            # Try Pattern 3 if still no results
+            if not lpas_found:
+                logger.info("Trying PDF Pattern 3 (coordinates before LPA)...")
+                matches = re.finditer(lpa_patterns[2], text, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    try:
+                        lat = float(match.group(1))
+                        lon = float(match.group(2))
+                        
+                        logger.info(f"PDF Pattern 3 match: ({lat}°N, {lon}°E)")
+                        
+                        if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                            lpas_found.append({
+                                'distance': None,
+                                'direction': None,
+                                'location_name': 'Philippine Area of Responsibility',
+                                'latitude': lat,
+                                'longitude': lon,
+                                'pattern': 3
+                            })
+                            logger.info(f"✓ Valid LPA from PDF: ({lat}°N, {lon}°E)")
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing PDF Pattern 3: {e}")
+                        continue
+            
+            if lpas_found:
+                # Return the first LPA found
+                lpa = lpas_found[0]
+                description = f"{lpa['distance']} km {lpa['direction']} of {lpa['location_name']}" if lpa['distance'] else f"at {lpa['latitude']}°N, {lpa['longitude']}°E"
+                
+                logger.info(f"SUCCESS! Found {len(lpas_found)} LPA(s) in PDF")
+                
+                return {
+                    'source': 'pdf_bulletin',
+                    'type': 'Low Pressure Area',
+                    'bulletin_time': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    'name': 'LPA',
+                    'latitude': lpa['latitude'],
+                    'longitude': lpa['longitude'],
+                    'movement_direction': None,
+                    'movement_speed': None,
+                    'max_winds': None,
+                    'max_gusts': None,
+                    'tcws_areas': {},
+                    'next_bulletin': None,
+                    'description': description,
+                    'additional_lpas': lpas_found[1:] if len(lpas_found) > 1 else []
+                }
+            
+            logger.warning("No valid LPA coordinates found in PDF")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error parsing LPA from PDF text: {e}", exc_info=True)
             return None
     
     def _check_weather_page_lpa(self):
