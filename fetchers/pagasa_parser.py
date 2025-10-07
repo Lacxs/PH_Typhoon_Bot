@@ -33,17 +33,18 @@ class PAGASAParser:
         Returns parsed bulletin data or None if no active system
         """
         try:
-            # Priority 1: Check main weather page for LPAs (most reliable for LPAs)
+            # Priority 1: Check for active tropical cyclones with coordinates
+            data = self._check_tropical_cyclone()
+            if data and data.get('latitude') and data.get('longitude'):
+                # Valid tropical cyclone with coordinates
+                return data
+            
+            # Priority 2: Check main weather page for LPAs (most reliable)
             lpa_data = self._check_weather_page_lpa()
             if lpa_data:
                 return lpa_data
             
-            # Priority 2: Check for active tropical cyclones
-            data = self._check_tropical_cyclone()
-            if data:
-                return data
-            
-            # Priority 3: Check other pages for LPAs
+            # Priority 3: Check other pages for LPAs (fallback)
             lpa_data = self._check_low_pressure_area()
             if lpa_data:
                 return lpa_data
