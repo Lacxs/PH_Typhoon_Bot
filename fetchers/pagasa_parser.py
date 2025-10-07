@@ -37,23 +37,27 @@ class PAGASAParser:
             data = self._check_tropical_cyclone()
             if data and data.get('latitude') and data.get('longitude'):
                 # Valid tropical cyclone with coordinates
+                logger.info(f"✓ Found TC with coordinates: {data.get('name')}")
                 return data
             
             # Priority 2: Check main weather page for LPAs (most reliable)
+            logger.info("No valid TC data, checking for LPAs...")
             lpa_data = self._check_weather_page_lpa()
             if lpa_data:
+                logger.info(f"✓ Found LPA from weather page")
                 return lpa_data
             
             # Priority 3: Check other pages for LPAs (fallback)
             lpa_data = self._check_low_pressure_area()
             if lpa_data:
+                logger.info(f"✓ Found LPA from fallback check")
                 return lpa_data
             
             logger.info("No active tropical cyclone or LPA")
             return None
         
         except Exception as e:
-            logger.error(f"Error fetching PAGASA bulletin: {e}")
+            logger.error(f"Error fetching PAGASA bulletin: {e}", exc_info=True)
             return None
     
     def _check_weather_page_lpa(self):
@@ -62,40 +66,114 @@ class PAGASAParser:
         This page clearly shows LPAs with coordinates in a structured format
         """
         try:
-            logger.debug("Checking main weather page for LPAs...")
+            logger.info("Checking main weather page for LPAs...")
             response = self.session.get(self.PAGASA_WEATHER_URL, timeout=15)
             response.raise_for_status()
             
             text = response.text
             
-            # Look for LPA with coordinates in format like:
-            # "the Low Pressure Area (LPA) was estimated based on all available at 90 km East Northeast of Daet, Camarines Norte (14.5°N, 123.7°E)"
-            lpa_pattern = r'(?:Low\s+Pressure\s+Area|LPA).*?(?:estimated|located|observed).*?at\s+(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E\)'
+            # Log sample for debugging
+            logger.debug(f"Weather page fetched, length: {len(text)} chars")
+            logger.debug(f"Sample (first 800 chars): {text[:800]}")
             
-            matches = re.finditer(lpa_pattern, text, re.IGNORECASE | re.DOTALL)
+            # Pattern 1: Full format with location reference
+            # "the Low Pressure Area (LPA) was estimated based on all available at 90 km East Northeast of Daet, Camarines Norte (14.5°N, 123.7°E)"
+            lpa_pattern1 = r'(?:Low\s+Pressure\s+Area|LPA).*?(?:estimated|located|observed).*?at\s+(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E\)'
+            
+            # Pattern 2: Simpler format with just coordinates
+            # "Low Pressure Area (LPA) at 14.5°N, 123.7°E"
+            lpa_pattern2 = r'(?:Low\s+Pressure\s+Area|LPA).*?(?:at|near)\s*(\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E'
+            
+            # Pattern 3: Coordinates followed by LPA mention
+            # "14.5°N, 123.7°E ... Low Pressure Area"
+            lpa_pattern3 = r'(\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E.*?(?:Low\s+Pressure\s+Area|LPA)'
             
             lpas_found = []
+            
+            # Try Pattern 1 (most detailed)
+            matches = re.finditer(lpa_pattern1, text, re.IGNORECASE | re.DOTALL)
             for match in matches:
-                distance = match.group(1)
-                direction = match.group(2).strip()
-                location_name = match.group(3).strip()
-                lat = float(match.group(4))
-                lon = float(match.group(5))
-                
-                # Validate coordinates
-                if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
-                    lpas_found.append({
-                        'distance': distance,
-                        'direction': direction,
-                        'location_name': location_name,
-                        'latitude': lat,
-                        'longitude': lon
-                    })
-                    logger.info(f"Found LPA: {distance} km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                try:
+                    distance = match.group(1)
+                    direction = match.group(2).strip()
+                    location_name = match.group(3).strip()
+                    lat = float(match.group(4))
+                    lon = float(match.group(5))
+                    
+                    logger.debug(f"Pattern 1 match: {distance}km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                    
+                    # Validate coordinates
+                    if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                        lpas_found.append({
+                            'distance': distance,
+                            'direction': direction,
+                            'location_name': location_name,
+                            'latitude': lat,
+                            'longitude': lon,
+                            'pattern': 1
+                        })
+                        logger.info(f"✓ Found LPA (Pattern 1): {distance} km {direction} of {location_name} ({lat}°N, {lon}°E)")
+                    else:
+                        logger.warning(f"Coordinates outside valid range: {lat}°N, {lon}°E")
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Error parsing Pattern 1 match: {e}")
+                    continue
+            
+            # Try Pattern 2 if no results yet
+            if not lpas_found:
+                logger.debug("Trying Pattern 2...")
+                matches = re.finditer(lpa_pattern2, text, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    try:
+                        lat = float(match.group(1))
+                        lon = float(match.group(2))
+                        
+                        logger.debug(f"Pattern 2 match: ({lat}°N, {lon}°E)")
+                        
+                        if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                            lpas_found.append({
+                                'distance': None,
+                                'direction': None,
+                                'location_name': 'Philippine Area of Responsibility',
+                                'latitude': lat,
+                                'longitude': lon,
+                                'pattern': 2
+                            })
+                            logger.info(f"✓ Found LPA (Pattern 2): ({lat}°N, {lon}°E)")
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing Pattern 2 match: {e}")
+                        continue
+            
+            # Try Pattern 3 if still no results
+            if not lpas_found:
+                logger.debug("Trying Pattern 3...")
+                matches = re.finditer(lpa_pattern3, text, re.IGNORECASE | re.DOTALL)
+                for match in matches:
+                    try:
+                        lat = float(match.group(1))
+                        lon = float(match.group(2))
+                        
+                        logger.debug(f"Pattern 3 match: ({lat}°N, {lon}°E)")
+                        
+                        if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                            lpas_found.append({
+                                'distance': None,
+                                'direction': None,
+                                'location_name': 'Philippine Area of Responsibility',
+                                'latitude': lat,
+                                'longitude': lon,
+                                'pattern': 3
+                            })
+                            logger.info(f"✓ Found LPA (Pattern 3): ({lat}°N, {lon}°E)")
+                    except (ValueError, IndexError) as e:
+                        logger.debug(f"Error parsing Pattern 3 match: {e}")
+                        continue
             
             if lpas_found:
                 # Return the first (usually most significant) LPA
                 lpa = lpas_found[0]
+                description = f"{lpa['distance']} km {lpa['direction']} of {lpa['location_name']}" if lpa['distance'] else f"at {lpa['latitude']}°N, {lpa['longitude']}°E"
+                
                 return {
                     'source': 'weather_page',
                     'type': 'Low Pressure Area',
@@ -109,14 +187,15 @@ class PAGASAParser:
                     'max_gusts': None,
                     'tcws_areas': {},
                     'next_bulletin': None,
-                    'description': f"{lpa['distance']} km {lpa['direction']} of {lpa['location_name']}",
+                    'description': description,
                     'additional_lpas': lpas_found[1:] if len(lpas_found) > 1 else []
                 }
             
+            logger.info("No LPA found on weather page")
             return None
         
         except Exception as e:
-            logger.warning(f"Weather page LPA check failed: {e}")
+            logger.warning(f"Weather page LPA check failed: {e}", exc_info=True)
             return None
     
     def _check_tropical_cyclone(self):
@@ -126,6 +205,7 @@ class PAGASAParser:
             data = self._parse_metafile()
             if data and data.get('latitude') and data.get('longitude'):
                 # Valid data with coordinates
+                logger.info(f"✓ Metafile has complete TC data")
                 return data
             
             # If metafile found TC name but no coordinates, try web scraping
@@ -133,13 +213,16 @@ class PAGASAParser:
                 logger.info(f"TC '{data.get('name')}' found but no coordinates, trying web scraping...")
                 web_data = self._parse_web_bulletin(known_name=data.get('name'))
                 if web_data and web_data.get('latitude') and web_data.get('longitude'):
+                    logger.info(f"✓ Web scraping provided coordinates for {data.get('name')}")
                     return web_data
+                else:
+                    logger.warning(f"Web scraping also failed to get coordinates for {data.get('name')}")
             
             # No valid TC data, return None to check for LPAs
             return None
         
         except Exception as e:
-            logger.warning(f"Tropical cyclone check failed: {e}")
+            logger.warning(f"Tropical cyclone check failed: {e}", exc_info=True)
             return None
     
     def _parse_metafile(self):
@@ -151,8 +234,9 @@ class PAGASAParser:
             
             text = response.text
             logger.debug(f"Metafile fetched, length: {len(text)} chars")
+            logger.debug(f"Metafile content sample: {text[:500]}")
             
-            # NEW: Check for TC name in format: PAOLO(MATMO) or NAME(INTERNATIONAL_NAME)
+            # Check for TC name in format: PAOLO(MATMO) or NAME(INTERNATIONAL_NAME)
             tc_name_pattern = r'([A-Z]{3,})\s*\(([A-Z]+)\)'
             tc_match = re.search(tc_name_pattern, text)
             
@@ -161,22 +245,23 @@ class PAGASAParser:
                 international_name = tc_match.group(2)
                 
                 # Filter out false positives
-                excluded_words = ['WARNING', 'BULLETIN', 'FORECAST', 'ADVISORY', 'SHIPPING']
+                excluded_words = ['WARNING', 'BULLETIN', 'FORECAST', 'ADVISORY', 'SHIPPING', 'WEATHER']
                 if local_name not in excluded_words:
                     logger.info(f"Metafile shows active TC: {local_name} ({international_name})")
                     
                     # Fetch the actual bulletin page for details
                     return self._parse_web_bulletin(known_name=local_name)
             
-            # OLD METHOD: Check if there's an active tropical cyclone
+            # Check if there's an active tropical cyclone
             if "NO TROPICAL CYCLONE" in text.upper():
                 logger.info("Metafile reports: No active tropical cyclone")
                 return None
             
+            logger.debug("No TC pattern matched in metafile")
             return None
         
         except Exception as e:
-            logger.warning(f"Metafile parsing failed: {e}")
+            logger.warning(f"Metafile parsing failed: {e}", exc_info=True)
             return None
     
     def _check_low_pressure_area(self):
@@ -192,69 +277,97 @@ class PAGASAParser:
             
             for url in urls:
                 try:
+                    logger.debug(f"Checking {url} for LPA...")
                     response = self.session.get(url, timeout=15)
                     response.raise_for_status()
                     
                     soup = BeautifulSoup(response.content, 'html.parser')
                     text = soup.get_text()
                     
+                    logger.debug(f"Page fetched, length: {len(text)} chars")
+                    
                     # Look for LPA mentions
-                    lpa_data = self._parse_lpa_from_text(text)
+                    lpa_data = self._parse_lpa_from_text(text, url)
                     if lpa_data:
-                        logger.info(f"Found LPA: {lpa_data.get('name', 'Unknown')}")
+                        logger.info(f"✓ Found LPA from {url}: {lpa_data.get('name', 'Unknown')}")
                         return lpa_data
                 
                 except Exception as e:
                     logger.debug(f"Could not fetch {url}: {e}")
                     continue
             
+            logger.info("No LPA found in fallback check")
             return None
         
         except Exception as e:
-            logger.warning(f"LPA check failed: {e}")
+            logger.warning(f"LPA fallback check failed: {e}", exc_info=True)
             return None
     
-    def _parse_lpa_from_text(self, text):
+    def _parse_lpa_from_text(self, text, source_url="unknown"):
         """Parse LPA information from text"""
-        # Look for LPA patterns
+        # Multiple LPA patterns to catch different formats
         lpa_patterns = [
-            r'(?:Low\s+Pressure\s+Area|LPA).*?(?:located|observed|estimated|monitored).*?(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E',
-            r'LPA.*?at\s+(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E',
-            r'(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E.*?(?:Low\s+Pressure\s+Area|LPA)',
+            # Pattern 1: "Low Pressure Area at 14.5°N, 123.7°E"
+            r'(?:Low\s+Pressure\s+Area|LPA).*?(?:at|located|observed|estimated|monitored)\s+(\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E',
+            # Pattern 2: "LPA at 14.5N 123.7E" (no degree symbols)
+            r'LPA.*?at\s+(\d+\.?\d*)\s*N[,\s]+(\d+\.?\d*)\s*E',
+            # Pattern 3: Coordinates before LPA mention
+            r'(\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E.*?(?:Low\s+Pressure\s+Area|LPA)',
+            # Pattern 4: With distance reference
+            r'(?:Low\s+Pressure\s+Area|LPA).*?(\d+)\s*km.*?(\d+\.?\d*)\s*°?\s*N[,\s]+(\d+\.?\d*)\s*°?\s*E',
         ]
         
-        for pattern in lpa_patterns:
+        for i, pattern in enumerate(lpa_patterns, 1):
+            logger.debug(f"Trying LPA pattern {i}...")
             match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
             if match:
-                lat = float(match.group(1))
-                lon = float(match.group(2))
-                
-                # Validate coordinates are in reasonable Philippine region
-                if not (4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0):
-                    logger.debug(f"Coordinates outside expected region: {lat}°N, {lon}°E")
+                try:
+                    # Pattern 4 has an extra group for distance
+                    if i == 4:
+                        distance = match.group(1)
+                        lat = float(match.group(2))
+                        lon = float(match.group(3))
+                    else:
+                        lat = float(match.group(1))
+                        lon = float(match.group(2))
+                        distance = None
+                    
+                    logger.debug(f"Pattern {i} matched: {lat}°N, {lon}°E")
+                    
+                    # Validate coordinates are in reasonable Philippine region
+                    if not (4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0):
+                        logger.warning(f"Coordinates outside expected region: {lat}°N, {lon}°E")
+                        continue
+                    
+                    logger.info(f"✓ Valid LPA coordinates found: {lat}°N, {lon}°E")
+                    
+                    # Extract additional context around the LPA mention
+                    lpa_context = self._extract_lpa_context(text, match.start())
+                    logger.debug(f"LPA context: {lpa_context[:200]}")
+                    
+                    data = {
+                        'source': f'lpa_monitoring_{source_url}',
+                        'type': 'Low Pressure Area',
+                        'bulletin_time': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                        'name': 'LPA',
+                        'latitude': lat,
+                        'longitude': lon,
+                        'movement_direction': self._extract_movement_direction(lpa_context),
+                        'movement_speed': self._extract_movement_speed(lpa_context),
+                        'max_winds': None,
+                        'max_gusts': None,
+                        'tcws_areas': {},
+                        'next_bulletin': None,
+                        'description': lpa_context[:200].strip()
+                    }
+                    
+                    return data
+                    
+                except (ValueError, IndexError) as e:
+                    logger.debug(f"Error parsing LPA pattern {i}: {e}")
                     continue
-                
-                # Extract additional context around the LPA mention
-                lpa_context = self._extract_lpa_context(text, match.start())
-                
-                data = {
-                    'source': 'lpa_monitoring',
-                    'type': 'Low Pressure Area',
-                    'bulletin_time': datetime.now().strftime("%Y-%m-%d %H:%M"),
-                    'name': 'LPA',
-                    'latitude': lat,
-                    'longitude': lon,
-                    'movement_direction': self._extract_movement_direction(lpa_context),
-                    'movement_speed': self._extract_movement_speed(lpa_context),
-                    'max_winds': None,
-                    'max_gusts': None,
-                    'tcws_areas': {},
-                    'next_bulletin': None,
-                    'description': lpa_context[:200]
-                }
-                
-                return data
         
+        logger.debug("No LPA patterns matched")
         return None
     
     def _extract_lpa_context(self, text, position, chars=300):
@@ -266,26 +379,23 @@ class PAGASAParser:
     def _parse_web_bulletin(self, known_name=None):
         """Fallback: scrape PAGASA website for bulletin - IMPROVED VERSION"""
         try:
-            logger.info("Falling back to web scraping...")
+            logger.info("Fetching web bulletin...")
             response = self.session.get(self.PAGASA_BULLETIN_URL, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # IMPROVED: Try multiple selectors in priority order
+            # Try multiple selectors in priority order
             bulletin_content = None
             selectors = [
-                # Original selectors
                 ('div', 'bulletin-content'),
                 ('article', None),
                 ('main', None),
-                # Additional common WordPress/CMS selectors
                 ('div', 'entry-content'),
                 ('div', 'post-content'),
                 ('div', 'content'),
                 ('div', 'page-content'),
                 ('section', 'content'),
-                # Broader fallbacks
                 ('div', 'container'),
             ]
             
@@ -312,20 +422,25 @@ class PAGASAParser:
             
             text = bulletin_content.get_text()
             logger.debug(f"Extracted text length: {len(text)} chars")
+            logger.debug(f"Text sample: {text[:500]}")
             
             # Check for active cyclone
             if "NO TROPICAL CYCLONE" in text.upper() or "WALA" in text.upper():
                 logger.info("Webpage confirms: No active tropical cyclone")
                 return None
             
-            # Parse similar to metafile
+            # Extract all data
+            lat = self._extract_latitude(text)
+            lon = self._extract_longitude(text)
+            tc_name = known_name or self._extract_cyclone_name(text)
+            
             data = {
                 'source': 'web',
                 'type': 'Tropical Cyclone',
                 'bulletin_time': self._extract_bulletin_time(text),
-                'name': known_name or self._extract_cyclone_name(text),
-                'latitude': self._extract_latitude(text),
-                'longitude': self._extract_longitude(text),
+                'name': tc_name,
+                'latitude': lat,
+                'longitude': lon,
                 'movement_direction': self._extract_movement_direction(text),
                 'movement_speed': self._extract_movement_speed(text),
                 'max_winds': self._extract_max_winds(text),
@@ -339,11 +454,18 @@ class PAGASAParser:
                 return data
             else:
                 logger.warning(f"Incomplete web data - Name: {data['name']}, Lat: {data['latitude']}, Lon: {data['longitude']}")
+                # Log more details for debugging
+                if not lat:
+                    logger.warning("Failed to extract latitude from bulletin")
+                if not lon:
+                    logger.warning("Failed to extract longitude from bulletin")
+                if not tc_name or tc_name == "Unknown":
+                    logger.warning("Failed to extract cyclone name from bulletin")
             
             return None
         
         except Exception as e:
-            logger.error(f"Web bulletin parsing failed: {e}")
+            logger.error(f"Web bulletin parsing failed: {e}", exc_info=True)
             return None
     
     def _extract_bulletin_time(self, text):
@@ -383,42 +505,62 @@ class PAGASAParser:
                 name = match.group(1).upper()
                 # Filter out false positives and ensure name is valid
                 if name not in excluded_words and len(name) >= 3:
+                    logger.debug(f"Extracted cyclone name: {name}")
                     return name
         
+        logger.debug("Could not extract cyclone name")
         return "Unknown"
     
     def _extract_latitude(self, text):
-        """Extract latitude - IMPROVED"""
+        """Extract latitude - IMPROVED with better logging"""
         patterns = [
             r'(\d+\.?\d*)\s*°?\s*N',
             r'(\d+\.?\d*)\s*degrees?\s*N',
             r'latitude[:\s]+(\d+\.?\d*)',
         ]
         
-        for pattern in patterns:
+        for i, pattern in enumerate(patterns, 1):
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                lat = float(match.group(1))
-                # Validate reasonable range for Philippine area
-                if 4.0 <= lat <= 25.0:
-                    return lat
+                try:
+                    lat = float(match.group(1))
+                    logger.debug(f"Latitude pattern {i} found: {lat}")
+                    # Validate reasonable range for Philippine area
+                    if 4.0 <= lat <= 25.0:
+                        logger.debug(f"✓ Valid latitude: {lat}")
+                        return lat
+                    else:
+                        logger.debug(f"Latitude {lat} outside valid range 4-25")
+                except ValueError:
+                    continue
+        
+        logger.debug("No valid latitude pattern found")
         return None
     
     def _extract_longitude(self, text):
-        """Extract longitude - IMPROVED"""
+        """Extract longitude - IMPROVED with better logging"""
         patterns = [
             r'(\d+\.?\d*)\s*°?\s*E',
             r'(\d+\.?\d*)\s*degrees?\s*E',
             r'longitude[:\s]+(\d+\.?\d*)',
         ]
         
-        for pattern in patterns:
+        for i, pattern in enumerate(patterns, 1):
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                lon = float(match.group(1))
-                # Validate reasonable range for Philippine area
-                if 115.0 <= lon <= 135.0:
-                    return lon
+                try:
+                    lon = float(match.group(1))
+                    logger.debug(f"Longitude pattern {i} found: {lon}")
+                    # Validate reasonable range for Philippine area
+                    if 115.0 <= lon <= 135.0:
+                        logger.debug(f"✓ Valid longitude: {lon}")
+                        return lon
+                    else:
+                        logger.debug(f"Longitude {lon} outside valid range 115-135")
+                except ValueError:
+                    continue
+        
+        logger.debug("No valid longitude pattern found")
         return None
     
     def _extract_movement_direction(self, text):
@@ -531,6 +673,8 @@ class PAGASAParser:
             soup = BeautifulSoup(response.content, 'html.parser')
             text = soup.get_text()
             
+            logger.debug(f"Threat forecast page length: {len(text)} chars")
+            
             forecast_data = {
                 'has_threat': False,
                 'areas': [],
@@ -548,11 +692,13 @@ class PAGASAParser:
             for keyword in threat_keywords:
                 if keyword in text_lower:
                     forecast_data['has_threat'] = True
+                    logger.debug(f"Found threat keyword: {keyword}")
                     break
             
             if not forecast_data['has_threat']:
                 if any(phrase in text_lower for phrase in ['no areas', 'no tropical cyclone', 'none identified']):
                     forecast_data['summary'] = "No areas of concern identified"
+                    logger.info("Threat forecast: No areas of concern")
                     return forecast_data
             
             probability_pattern = r'(high|medium|moderate|low)\s+(?:probability|chance|potential|risk)'
@@ -597,6 +743,7 @@ class PAGASAParser:
                 })
                 
                 forecast_data['summary'] = f"{highest_prob} probability - {primary_location}"
+                logger.info(f"Threat forecast: {forecast_data['summary']}")
             
             elif probabilities_found:
                 highest_prob = probabilities_found[0]
@@ -606,17 +753,20 @@ class PAGASAParser:
                     'probability': highest_prob,
                     'timeframe': timeframe or '3-5 days'
                 })
+                logger.info(f"Threat forecast: {forecast_data['summary']}")
             
             elif forecast_data['has_threat']:
                 forecast_data['summary'] = "Areas being monitored for potential development"
+                logger.info("Threat forecast: Areas being monitored")
             
             else:
                 forecast_data['summary'] = "No significant threats identified"
+                logger.info("Threat forecast: No significant threats")
             
             return forecast_data
         
         except Exception as e:
-            logger.warning(f"Could not fetch threat forecast: {e}")
+            logger.warning(f"Could not fetch threat forecast: {e}", exc_info=True)
             return {
                 'has_threat': False,
                 'areas': [],
