@@ -64,6 +64,11 @@ def should_skip_run():
     Check if we should skip this run (to implement adaptive frequency).
     Returns True if we should skip (no elevated threat and odd hour).
     """
+    # ALWAYS run if manually forced via environment variable
+    force_status = os.getenv("FORCE_STATUS_REPORT", "false").lower() == "true"
+    if force_status:
+        return False
+    
     # Always run on even hours (0, 2, 4, 6, 8, 10, etc.)
     now = datetime.now(PHT)
     if now.hour % 2 == 0:
