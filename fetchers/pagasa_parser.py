@@ -301,20 +301,30 @@ class PAGASAParser:
         return None
     
     def _extract_cyclone_name(self, text):
-        """Extract cyclone name"""
+        """Extract cyclone name - IMPROVED with better filtering"""
         patterns = [
             r'(?:TROPICAL\s+(?:DEPRESSION|STORM)|TYPHOON|SUPER\s+TYPHOON)\s+"?([A-Z]+)"?',
             r'T[CD]\s+"?([A-Z]+)"?',
             r'(?:named|called)\s+"?([A-Z]+)"?',
         ]
         
+        # Words to exclude (false positives)
+        excluded_words = [
+            'THE', 'AND', 'FOR', 'WITH', 'WARNING', 'BULLETIN', 
+            'FORECAST', 'ADVISORY', 'UPDATE', 'ISSUED', 'EFFECTS',
+            'AREA', 'PAR', 'RESPONSIBILITY', 'AFFECTING', 'TROPICAL',
+            'CYCLONE', 'PHILIPPINE', 'SEVERE', 'WEATHER', 'STORM',
+            'DEPRESSION'
+        ]
+        
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 name = match.group(1).upper()
-                # Filter out common false positives
-                if name not in ['THE', 'AND', 'FOR', 'WITH']:
+                # Filter out false positives and ensure name is valid
+                if name not in excluded_words and len(name) >= 3:
                     return name
+        
         return "Unknown"
     
     def _extract_latitude(self, text):
