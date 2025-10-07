@@ -239,12 +239,19 @@ def main():
             # Clear elevated threat status
             save_threat_status(False)
             
+            # Fetch 5-day threat forecast for status reports
+            forecast_data = None
+            try:
+                forecast_data = pagasa.fetch_threat_forecast()
+            except Exception as e:
+                logger.warning(f"Could not fetch threat forecast: {e}")
+            
             # Send status update if scheduled OR manually forced
             if should_send_status_update() or force_status:
                 logger.info("Sending status update...")
                 if force_status:
                     logger.info("Status report manually triggered")
-                notifier.send_status_update()
+                notifier.send_status_update(forecast_data)
                 save_status_update()
             
             return
