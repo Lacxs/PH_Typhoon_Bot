@@ -1,6 +1,6 @@
 """
-PAGASA Severe Weather Bulletin Parser - IMPROVED VERSION
-Fetches from official data sources first, then scrapes as fallback with better selectors
+PAGASA Severe Weather Bulletin Parser - ENHANCED VERSION
+Better support for real metafile format and LPA detection from /weather page
 """
 
 import re
@@ -33,12 +33,17 @@ class PAGASAParser:
         Returns parsed bulletin data or None if no active system
         """
         try:
-            # First check for active tropical cyclones
+            # Priority 1: Check main weather page for LPAs (most reliable for LPAs)
+            lpa_data = self._check_weather_page_lpa()
+            if lpa_data:
+                return lpa_data
+            
+            # Priority 2: Check for active tropical cyclones
             data = self._check_tropical_cyclone()
             if data:
                 return data
             
-            # If no typhoon, check for LPAs
+            # Priority 3: Check other pages for LPAs
             lpa_data = self._check_low_pressure_area()
             if lpa_data:
                 return lpa_data
@@ -48,6 +53,69 @@ class PAGASAParser:
         
         except Exception as e:
             logger.error(f"Error fetching PAGASA bulletin: {e}")
+            return None
+    
+    def _check_weather_page_lpa(self):
+        """
+        Check the main /weather page for LPAs (PRIMARY METHOD)
+        This page clearly shows LPAs with coordinates in a structured format
+        """
+        try:
+            logger.debug("Checking main weather page for LPAs...")
+            response = self.session.get(self.PAGASA_WEATHER_URL, timeout=15)
+            response.raise_for_status()
+            
+            text = response.text
+            
+            # Look for LPA with coordinates in format like:
+            # "the Low Pressure Area (LPA) was estimated based on all available at 90 km East Northeast of Daet, Camarines Norte (14.5°N, 123.7°E)"
+            lpa_pattern = r'(?:Low\s+Pressure\s+Area|LPA).*?(?:estimated|located|observed).*?at\s+(\d+)\s*km\s+([\w\s]+?)\s+of\s+([\w\s,]+?)\s*\((\d+\.?\d*)\s*°?\s*N,?\s*(\d+\.?\d*)\s*°?\s*E\)'
+            
+            matches = re.finditer(lpa_pattern, text, re.IGNORECASE | re.DOTALL)
+            
+            lpas_found = []
+            for match in matches:
+                distance = match.group(1)
+                direction = match.group(2).strip()
+                location_name = match.group(3).strip()
+                lat = float(match.group(4))
+                lon = float(match.group(5))
+                
+                # Validate coordinates
+                if 4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0:
+                    lpas_found.append({
+                        'distance': distance,
+                        'direction': direction,
+                        'location_name': location_name,
+                        'latitude': lat,
+                        'longitude': lon
+                    })
+                    logger.info(f"Found LPA: {distance} km {direction} of {location_name} ({lat}°N, {lon}°E)")
+            
+            if lpas_found:
+                # Return the first (usually most significant) LPA
+                lpa = lpas_found[0]
+                return {
+                    'source': 'weather_page',
+                    'type': 'Low Pressure Area',
+                    'bulletin_time': datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    'name': 'LPA',
+                    'latitude': lpa['latitude'],
+                    'longitude': lpa['longitude'],
+                    'movement_direction': None,
+                    'movement_speed': None,
+                    'max_winds': None,
+                    'max_gusts': None,
+                    'tcws_areas': {},
+                    'next_bulletin': None,
+                    'description': f"{lpa['distance']} km {lpa['direction']} of {lpa['location_name']}",
+                    'additional_lpas': lpas_found[1:] if len(lpas_found) > 1 else []
+                }
+            
+            return None
+        
+        except Exception as e:
+            logger.warning(f"Weather page LPA check failed: {e}")
             return None
     
     def _check_tropical_cyclone(self):
@@ -65,14 +133,50 @@ class PAGASAParser:
             logger.warning(f"Tropical cyclone check failed: {e}")
             return None
     
-    def _check_low_pressure_area(self):
-        """Check for active Low Pressure Areas"""
+    def _parse_metafile(self):
+        """Parse PAGASA metafile.txt - IMPROVED to handle real format"""
         try:
-            logger.info("Checking for Low Pressure Areas...")
+            logger.debug("Fetching metafile.txt...")
+            response = self.session.get(self.PAGASA_METAFILE_URL, timeout=10)
+            response.raise_for_status()
+            
+            text = response.text
+            logger.debug(f"Metafile fetched, length: {len(text)} chars")
+            
+            # NEW: Check for TC name in format: PAOLO(MATMO) or NAME(INTERNATIONAL_NAME)
+            tc_name_pattern = r'([A-Z]{3,})\s*\(([A-Z]+)\)'
+            tc_match = re.search(tc_name_pattern, text)
+            
+            if tc_match:
+                local_name = tc_match.group(1)
+                international_name = tc_match.group(2)
+                
+                # Filter out false positives
+                excluded_words = ['WARNING', 'BULLETIN', 'FORECAST', 'ADVISORY', 'SHIPPING']
+                if local_name not in excluded_words:
+                    logger.info(f"Metafile shows active TC: {local_name} ({international_name})")
+                    
+                    # Fetch the actual bulletin page for details
+                    return self._parse_web_bulletin(known_name=local_name)
+            
+            # OLD METHOD: Check if there's an active tropical cyclone
+            if "NO TROPICAL CYCLONE" in text.upper():
+                logger.info("Metafile reports: No active tropical cyclone")
+                return None
+            
+            return None
+        
+        except Exception as e:
+            logger.warning(f"Metafile parsing failed: {e}")
+            return None
+    
+    def _check_low_pressure_area(self):
+        """Check for active Low Pressure Areas (FALLBACK METHOD)"""
+        try:
+            logger.info("Checking for Low Pressure Areas (fallback)...")
             
             # Check multiple PAGASA pages for LPA information
             urls = [
-                self.PAGASA_WEATHER_URL,
                 self.PAGASA_LPA_URL,
                 self.PAGASA_BULLETIN_URL
             ]
@@ -150,51 +254,7 @@ class PAGASAParser:
         end = min(len(text), position + chars)
         return text[start:end].strip()
     
-    def _parse_metafile(self):
-        """Parse PAGASA metafile.txt for quick bulletin access"""
-        try:
-            logger.debug("Fetching metafile.txt...")
-            response = self.session.get(self.PAGASA_METAFILE_URL, timeout=10)
-            response.raise_for_status()
-            
-            text = response.text
-            logger.debug(f"Metafile fetched, length: {len(text)} chars")
-            
-            # Check if there's an active tropical cyclone
-            if "NO TROPICAL CYCLONE" in text.upper():
-                logger.info("Metafile reports: No active tropical cyclone")
-                return None
-            
-            # Extract cyclone information using regex
-            data = {
-                'source': 'metafile',
-                'type': 'Tropical Cyclone',
-                'bulletin_time': self._extract_bulletin_time(text),
-                'name': self._extract_cyclone_name(text),
-                'latitude': self._extract_latitude(text),
-                'longitude': self._extract_longitude(text),
-                'movement_direction': self._extract_movement_direction(text),
-                'movement_speed': self._extract_movement_speed(text),
-                'max_winds': self._extract_max_winds(text),
-                'max_gusts': self._extract_max_gusts(text),
-                'tcws_areas': self._extract_tcws_areas(text),
-                'next_bulletin': self._extract_next_bulletin(text)
-            }
-            
-            # Validate essential fields
-            if data['latitude'] and data['longitude'] and data['name']:
-                logger.info(f"✓ Metafile parsed: {data['name']} at {data['latitude']}°N, {data['longitude']}°E")
-                return data
-            else:
-                logger.warning(f"Incomplete metafile data - Name: {data['name']}, Lat: {data['latitude']}, Lon: {data['longitude']}")
-            
-            return None
-        
-        except Exception as e:
-            logger.warning(f"Metafile parsing failed: {e}")
-            return None
-    
-    def _parse_web_bulletin(self):
+    def _parse_web_bulletin(self, known_name=None):
         """Fallback: scrape PAGASA website for bulletin - IMPROVED VERSION"""
         try:
             logger.info("Falling back to web scraping...")
@@ -239,15 +299,6 @@ class PAGASAParser:
             
             if not bulletin_content:
                 logger.error("Could not find bulletin content on webpage")
-                
-                # DEBUG: Save HTML for inspection
-                try:
-                    with open('debug_pagasa_page.html', 'w', encoding='utf-8') as f:
-                        f.write(soup.prettify())
-                    logger.info("Saved page HTML to debug_pagasa_page.html")
-                except:
-                    pass
-                
                 return None
             
             text = bulletin_content.get_text()
@@ -263,7 +314,7 @@ class PAGASAParser:
                 'source': 'web',
                 'type': 'Tropical Cyclone',
                 'bulletin_time': self._extract_bulletin_time(text),
-                'name': self._extract_cyclone_name(text),
+                'name': known_name or self._extract_cyclone_name(text),
                 'latitude': self._extract_latitude(text),
                 'longitude': self._extract_longitude(text),
                 'movement_direction': self._extract_movement_direction(text),
@@ -314,7 +365,7 @@ class PAGASAParser:
             'FORECAST', 'ADVISORY', 'UPDATE', 'ISSUED', 'EFFECTS',
             'AREA', 'PAR', 'RESPONSIBILITY', 'AFFECTING', 'TROPICAL',
             'CYCLONE', 'PHILIPPINE', 'SEVERE', 'WEATHER', 'STORM',
-            'DEPRESSION'
+            'DEPRESSION', 'SHIPPING'
         ]
         
         for pattern in patterns:
