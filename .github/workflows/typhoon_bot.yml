@@ -2,8 +2,8 @@ name: Typhoon Monitor Bot
 
 on:
   schedule:
-    # Run every 2 hours
-    - cron: "0 */2 * * *"
+    # Run every hour (bot will internally decide whether to skip based on threat level)
+    - cron: "0 * * * *"
   
   # Allow manual trigger with options
   workflow_dispatch:
