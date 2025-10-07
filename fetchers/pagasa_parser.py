@@ -1,6 +1,6 @@
 """
-PAGASA Severe Weather Bulletin Parser
-Fetches and parses official typhoon bulletins, LPA monitoring, and 5-day forecast from PAGASA
+PAGASA Severe Weather Bulletin Parser - IMPROVED VERSION
+Fetches from official data sources first, then scrapes as fallback with better selectors
 """
 
 import re
@@ -53,12 +53,12 @@ class PAGASAParser:
     def _check_tropical_cyclone(self):
         """Check for active tropical cyclones"""
         try:
-            # Try metafile.txt first (faster and more reliable)
+            # Try metafile.txt first (faster and more reliable - official data file)
             data = self._parse_metafile()
             if data:
                 return data
             
-            # Fallback to web scraping
+            # Fallback to web scraping if metafile fails
             return self._parse_web_bulletin()
         
         except Exception as e:
@@ -107,6 +107,7 @@ class PAGASAParser:
         lpa_patterns = [
             r'(?:Low\s+Pressure\s+Area|LPA).*?(?:located|observed|estimated|monitored).*?(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E',
             r'LPA.*?at\s+(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E',
+            r'(\d+\.?\d*)\s*°?\s*N.*?(\d+\.?\d*)\s*°?\s*E.*?(?:Low\s+Pressure\s+Area|LPA)',
         ]
         
         for pattern in lpa_patterns:
@@ -114,6 +115,11 @@ class PAGASAParser:
             if match:
                 lat = float(match.group(1))
                 lon = float(match.group(2))
+                
+                # Validate coordinates are in reasonable Philippine region
+                if not (4.0 <= lat <= 25.0 and 115.0 <= lon <= 135.0):
+                    logger.debug(f"Coordinates outside expected region: {lat}°N, {lon}°E")
+                    continue
                 
                 # Extract additional context around the LPA mention
                 lpa_context = self._extract_lpa_context(text, match.start())
@@ -147,14 +153,16 @@ class PAGASAParser:
     def _parse_metafile(self):
         """Parse PAGASA metafile.txt for quick bulletin access"""
         try:
+            logger.debug("Fetching metafile.txt...")
             response = self.session.get(self.PAGASA_METAFILE_URL, timeout=10)
             response.raise_for_status()
             
             text = response.text
+            logger.debug(f"Metafile fetched, length: {len(text)} chars")
             
             # Check if there's an active tropical cyclone
             if "NO TROPICAL CYCLONE" in text.upper():
-                logger.info("No active tropical cyclone reported")
+                logger.info("Metafile reports: No active tropical cyclone")
                 return None
             
             # Extract cyclone information using regex
@@ -175,7 +183,10 @@ class PAGASAParser:
             
             # Validate essential fields
             if data['latitude'] and data['longitude'] and data['name']:
+                logger.info(f"✓ Metafile parsed: {data['name']} at {data['latitude']}°N, {data['longitude']}°E")
                 return data
+            else:
+                logger.warning(f"Incomplete metafile data - Name: {data['name']}, Lat: {data['latitude']}, Lon: {data['longitude']}")
             
             return None
         
@@ -184,26 +195,67 @@ class PAGASAParser:
             return None
     
     def _parse_web_bulletin(self):
-        """Fallback: scrape PAGASA website for bulletin"""
+        """Fallback: scrape PAGASA website for bulletin - IMPROVED VERSION"""
         try:
+            logger.info("Falling back to web scraping...")
             response = self.session.get(self.PAGASA_BULLETIN_URL, timeout=15)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, 'html.parser')
             
-            # Find the latest bulletin content
-            bulletin_content = soup.find('div', class_='bulletin-content')
+            # IMPROVED: Try multiple selectors in priority order
+            bulletin_content = None
+            selectors = [
+                # Original selectors
+                ('div', 'bulletin-content'),
+                ('article', None),
+                ('main', None),
+                # Additional common WordPress/CMS selectors
+                ('div', 'entry-content'),
+                ('div', 'post-content'),
+                ('div', 'content'),
+                ('div', 'page-content'),
+                ('section', 'content'),
+                # Broader fallbacks
+                ('div', 'container'),
+            ]
+            
+            for tag, class_name in selectors:
+                if class_name:
+                    bulletin_content = soup.find(tag, class_=class_name)
+                    if bulletin_content:
+                        logger.debug(f"Found content using: <{tag} class='{class_name}'>")
+                        break
+                else:
+                    bulletin_content = soup.find(tag)
+                    if bulletin_content:
+                        logger.debug(f"Found content using: <{tag}>")
+                        break
+            
+            # Ultimate fallback: use body text
             if not bulletin_content:
-                bulletin_content = soup.find('article') or soup.find('main')
+                logger.warning("No specific content container found, using body text")
+                bulletin_content = soup.find('body')
             
             if not bulletin_content:
-                logger.warning("Could not find bulletin content on webpage")
+                logger.error("Could not find bulletin content on webpage")
+                
+                # DEBUG: Save HTML for inspection
+                try:
+                    with open('debug_pagasa_page.html', 'w', encoding='utf-8') as f:
+                        f.write(soup.prettify())
+                    logger.info("Saved page HTML to debug_pagasa_page.html")
+                except:
+                    pass
+                
                 return None
             
             text = bulletin_content.get_text()
+            logger.debug(f"Extracted text length: {len(text)} chars")
             
             # Check for active cyclone
-            if "NO TROPICAL CYCLONE" in text.upper():
+            if "NO TROPICAL CYCLONE" in text.upper() or "WALA" in text.upper():
+                logger.info("Webpage confirms: No active tropical cyclone")
                 return None
             
             # Parse similar to metafile
@@ -223,7 +275,10 @@ class PAGASAParser:
             }
             
             if data['latitude'] and data['longitude'] and data['name']:
+                logger.info(f"✓ Web scraping parsed: {data['name']} at {data['latitude']}°N, {data['longitude']}°E")
                 return data
+            else:
+                logger.warning(f"Incomplete web data - Name: {data['name']}, Lat: {data['latitude']}, Lon: {data['longitude']}")
             
             return None
         
@@ -236,6 +291,7 @@ class PAGASAParser:
         patterns = [
             r'(\d{1,2}:\d{2}\s*(?:AM|PM))\s+(\d{1,2}\s+\w+\s+\d{4})',
             r'Issued at\s+(\d{1,2}:\d{2}\s*(?:AM|PM))',
+            r'(\d{1,2}\s+\w+\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM))',
         ]
         
         for pattern in patterns:
@@ -247,35 +303,60 @@ class PAGASAParser:
     def _extract_cyclone_name(self, text):
         """Extract cyclone name"""
         patterns = [
-            r'(?:TROPICAL\s+(?:DEPRESSION|STORM)|TYPHOON|SUPER\s+TYPHOON)\s+([A-Z]+)',
-            r'T[CD]\s+([A-Z]+)',
+            r'(?:TROPICAL\s+(?:DEPRESSION|STORM)|TYPHOON|SUPER\s+TYPHOON)\s+"?([A-Z]+)"?',
+            r'T[CD]\s+"?([A-Z]+)"?',
+            r'(?:named|called)\s+"?([A-Z]+)"?',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return match.group(1).upper()
+                name = match.group(1).upper()
+                # Filter out common false positives
+                if name not in ['THE', 'AND', 'FOR', 'WITH']:
+                    return name
         return "Unknown"
     
     def _extract_latitude(self, text):
-        """Extract latitude"""
-        match = re.search(r'(\d+\.?\d*)\s*°?\s*N', text, re.IGNORECASE)
-        if match:
-            return float(match.group(1))
+        """Extract latitude - IMPROVED"""
+        patterns = [
+            r'(\d+\.?\d*)\s*°?\s*N',
+            r'(\d+\.?\d*)\s*degrees?\s*N',
+            r'latitude[:\s]+(\d+\.?\d*)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                lat = float(match.group(1))
+                # Validate reasonable range for Philippine area
+                if 4.0 <= lat <= 25.0:
+                    return lat
         return None
     
     def _extract_longitude(self, text):
-        """Extract longitude"""
-        match = re.search(r'(\d+\.?\d*)\s*°?\s*E', text, re.IGNORECASE)
-        if match:
-            return float(match.group(1))
+        """Extract longitude - IMPROVED"""
+        patterns = [
+            r'(\d+\.?\d*)\s*°?\s*E',
+            r'(\d+\.?\d*)\s*degrees?\s*E',
+            r'longitude[:\s]+(\d+\.?\d*)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                lon = float(match.group(1))
+                # Validate reasonable range for Philippine area
+                if 115.0 <= lon <= 135.0:
+                    return lon
         return None
     
     def _extract_movement_direction(self, text):
         """Extract movement direction"""
         patterns = [
             r'moving\s+(\w+(?:\s*-\s*\w+)?)',
-            r'(\w+(?:\s*-\s*\w+)?)\s+at\s+\d+\s*km/h'
+            r'(\w+(?:\s*-\s*\w+)?)\s+at\s+\d+\s*km/?h',
+            r'towards?\s+the\s+(\w+)',
         ]
         
         for pattern in patterns:
@@ -283,34 +364,50 @@ class PAGASAParser:
             if match:
                 direction = match.group(1).upper()
                 direction = direction.replace('WARD', '').strip()
-                return direction
+                # Validate it's actually a direction
+                valid_directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 
+                                   'NORTH', 'NORTHEAST', 'EAST', 'SOUTHEAST',
+                                   'SOUTH', 'SOUTHWEST', 'WEST', 'NORTHWEST',
+                                   'NNE', 'ENE', 'ESE', 'SSE', 'SSW', 'WSW', 'WNW', 'NNW']
+                if any(d in direction for d in valid_directions):
+                    return direction
         return None
     
     def _extract_movement_speed(self, text):
         """Extract movement speed in km/h"""
-        match = re.search(r'(\d+)\s*km/h', text, re.IGNORECASE)
+        match = re.search(r'(\d+)\s*km/?h', text, re.IGNORECASE)
         if match:
-            return int(match.group(1))
+            speed = int(match.group(1))
+            # Validate reasonable typhoon speed (0-100 km/h movement)
+            if 0 <= speed <= 100:
+                return speed
         return None
     
     def _extract_max_winds(self, text):
         """Extract maximum sustained winds"""
         patterns = [
-            r'maximum\s+(?:sustained\s+)?winds?\s+(?:of\s+)?(\d+)\s*km/h',
-            r'winds?\s+(?:of\s+)?(\d+)\s*km/h'
+            r'maximum\s+(?:sustained\s+)?winds?\s+(?:of\s+)?(\d+)\s*km/?h',
+            r'winds?\s+(?:of\s+)?(\d+)\s*km/?h',
+            r'max\s+winds?[:\s]+(\d+)\s*km/?h',
         ]
         
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                return int(match.group(1))
+                winds = int(match.group(1))
+                # Validate reasonable wind speed (30-300 km/h for cyclones)
+                if 30 <= winds <= 300:
+                    return winds
         return None
     
     def _extract_max_gusts(self, text):
         """Extract maximum gust speed"""
-        match = re.search(r'gusts?\s+(?:of\s+)?(\d+)\s*km/h', text, re.IGNORECASE)
+        match = re.search(r'gusts?\s+(?:of\s+)?(\d+)\s*km/?h', text, re.IGNORECASE)
         if match:
-            return int(match.group(1))
+            gusts = int(match.group(1))
+            # Validate reasonable gust speed (40-400 km/h)
+            if 40 <= gusts <= 400:
+                return gusts
         return None
     
     def _extract_tcws_areas(self, text):
@@ -318,22 +415,30 @@ class PAGASAParser:
         tcws_data = {}
         
         for level in range(1, 6):
-            pattern = rf'TCWS\s+#{level}[:\s]+(.*?)(?=TCWS\s+#|$)'
-            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            patterns = [
+                rf'TCWS\s+#{level}[:\s]+(.*?)(?=TCWS\s+#|$)',
+                rf'Signal\s+(?:No\.?\s*)?{level}[:\s]+(.*?)(?=Signal\s+(?:No\.?\s*)?\d|$)',
+                rf'Wind\s+Signal\s+{level}[:\s]+(.*?)(?=Wind\s+Signal\s+\d|$)',
+            ]
             
-            if match:
-                areas_text = match.group(1)
-                areas = re.split(r'[,;]|\sand\s', areas_text)
-                areas = [a.strip() for a in areas if a.strip()]
-                tcws_data[level] = areas
+            for pattern in patterns:
+                match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+                if match:
+                    areas_text = match.group(1)
+                    areas = re.split(r'[,;]|\sand\s', areas_text)
+                    areas = [a.strip() for a in areas if a.strip() and len(a.strip()) > 2]
+                    if areas:
+                        tcws_data[level] = areas
+                        break
         
         return tcws_data
     
     def _extract_next_bulletin(self, text):
         """Extract next bulletin time"""
         patterns = [
-            r'next\s+(?:bulletin|update|issue)\s+(?:will\s+be\s+)?(?:at\s+)?(\d{1,2}:\d{2}\s*(?:AM|PM))',
+            r'next\s+(?:bulletin|update|issue|advisory)\s+(?:will\s+be\s+)?(?:at\s+)?(\d{1,2}:\d{2}\s*(?:AM|PM))',
             r'(\d{1,2}:\d{2}\s*(?:AM|PM)).*?(?:today|tomorrow)',
+            r'next\s+(\d{1,2}\s*(?:AM|PM))',
         ]
         
         for pattern in patterns:
