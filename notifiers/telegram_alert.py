@@ -492,7 +492,7 @@ class TelegramNotifier:
         message = "✅ *Typhoon Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon and LPA alerts here."
         return self._send_message(message)
     
-    def send_status_update(self):
+    def send_status_update(self, forecast_data=None):
         """Send twice-daily status update when no threats exist"""
         now = datetime.now(PHT)
         date_str = now.strftime("%B %d, %Y")
@@ -509,6 +509,30 @@ class TelegramNotifier:
         message = f"{report_emoji} *{report_type}*\n"
         message += f"_{date_str}_\n\n"
         message += "✅ No tropical cyclones or low pressure areas detected within 700 km monitoring range.\n\n"
+        
+        # Add 5-day outlook if available
+        if forecast_data and forecast_data.get('summary'):
+            message += "📊 *5-Day Outlook:*\n"
+            
+            summary = forecast_data.get('summary')
+            message += f"• {summary}\n"
+            
+            # Add detailed area info if available
+            areas = forecast_data.get('areas', [])
+            if areas:
+                for area in areas[:2]:  # Limit to 2 areas
+                    location = area.get('location', 'Unknown')
+                    probability = area.get('probability', 'UNKNOWN')
+                    timeframe = area.get('timeframe', '3-5 days')
+                    
+                    # Only show if not already in summary
+                    if location.lower() not in summary.lower():
+                        message += f"• Area: {location}\n"
+                        message += f"• Formation probability: {probability}\n"
+                        message += f"• Timeframe: {timeframe}\n"
+            
+            message += "\n"
+        
         message += "🔍 Bot is actively monitoring PAGASA updates.\n"
         message += f"🕐 Report as of {time_str} PHT"
         
