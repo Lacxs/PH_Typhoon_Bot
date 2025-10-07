@@ -124,11 +124,19 @@ class PAGASAParser:
         try:
             # Try metafile.txt first (faster and more reliable - official data file)
             data = self._parse_metafile()
-            if data:
+            if data and data.get('latitude') and data.get('longitude'):
+                # Valid data with coordinates
                 return data
             
-            # Fallback to web scraping if metafile fails
-            return self._parse_web_bulletin()
+            # If metafile found TC name but no coordinates, try web scraping
+            if data and not (data.get('latitude') and data.get('longitude')):
+                logger.info(f"TC '{data.get('name')}' found but no coordinates, trying web scraping...")
+                web_data = self._parse_web_bulletin(known_name=data.get('name'))
+                if web_data and web_data.get('latitude') and web_data.get('longitude'):
+                    return web_data
+            
+            # No valid TC data, return None to check for LPAs
+            return None
         
         except Exception as e:
             logger.warning(f"Tropical cyclone check failed: {e}")
