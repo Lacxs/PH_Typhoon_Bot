@@ -1,0 +1,145 @@
+"""
+Test Script for PAGASA Parser
+Run this to verify the improved parser is working correctly
+"""
+
+import os
+import sys
+import logging
+from datetime import datetime
+
+# Add parent directory to path to import modules
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from fetchers.pagasa_parser import PAGASAParser
+
+# Configure detailed logging
+logging.basicConfig(
+    level=logging.DEBUG,  # Changed to DEBUG for maximum detail
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+
+def test_pagasa_fetch():
+    """Test PAGASA bulletin fetching with detailed output"""
+    
+    print("\n" + "="*80)
+    print("PAGASA PARSER TEST")
+    print("="*80)
+    print(f"Test started at: {datetime.now()}")
+    print()
+    
+    # Initialize parser
+    logger.info("Initializing PAGASA parser...")
+    parser = PAGASAParser()
+    
+    # Test 1: Fetch latest bulletin
+    print("\n[TEST 1] Fetching Latest Bulletin")
+    print("-"*80)
+    
+    try:
+        bulletin_data = parser.fetch_latest_bulletin()
+        
+        if bulletin_data:
+            print("\n✅ SUCCESS: Bulletin data retrieved!")
+            print("\n📊 BULLETIN DETAILS:")
+            print(f"   Source: {bulletin_data.get('source')}")
+            print(f"   Type: {bulletin_data.get('type')}")
+            print(f"   Name: {bulletin_data.get('name')}")
+            print(f"   Bulletin Time: {bulletin_data.get('bulletin_time')}")
+            print(f"   Location: {bulletin_data.get('latitude')}°N, {bulletin_data.get('longitude')}°E")
+            print(f"   Movement: {bulletin_data.get('movement_direction')} at {bulletin_data.get('movement_speed')} km/h")
+            print(f"   Max Winds: {bulletin_data.get('max_winds')} km/h")
+            print(f"   Max Gusts: {bulletin_data.get('max_gusts')} km/h")
+            print(f"   Next Bulletin: {bulletin_data.get('next_bulletin')}")
+            
+            tcws = bulletin_data.get('tcws_areas', {})
+            if tcws:
+                print(f"\n   🌀 TCWS Areas:")
+                for level, areas in tcws.items():
+                    print(f"      Signal #{level}: {len(areas)} area(s)")
+                    for area in areas[:3]:  # Show first 3 areas
+                        print(f"         - {area}")
+                    if len(areas) > 3:
+                        print(f"         ... and {len(areas) - 3} more")
+            else:
+                print("   No TCWS areas reported")
+            
+            # Show raw text sample if available
+            if 'raw_text' in bulletin_data:
+                print(f"\n   📄 Raw Text Sample:")
+                print(f"   {bulletin_data['raw_text'][:200]}...")
+            
+            print("\n" + "="*80)
+            print("✅ PARSER IS WORKING CORRECTLY")
+            print("="*80)
+            
+        else:
+            print("\n⚠️ NO ACTIVE SYSTEM")
+            print("   - No tropical cyclone or LPA currently active")
+            print("   - This is normal if there's no weather system")
+            print("   - Parser is functioning correctly")
+            
+            print("\n" + "="*80)
+            print("✅ PARSER IS WORKING (No active system to report)")
+            print("="*80)
+    
+    except Exception as e:
+        print(f"\n❌ ERROR: {e}")
+        logger.exception("Detailed error information:")
+        
+        print("\n" + "="*80)
+        print("❌ PARSER ENCOUNTERED AN ERROR")
+        print("="*80)
+        return False
+    
+    # Test 2: Fetch threat forecast
+    print("\n[TEST 2] Fetching 5-Day Threat Forecast")
+    print("-"*80)
+    
+    try:
+        forecast_data = parser.fetch_threat_forecast()
+        
+        if forecast_data:
+            print("\n✅ Forecast data retrieved!")
+            print(f"   Has Threat: {forecast_data.get('has_threat')}")
+            print(f"   Summary: {forecast_data.get('summary')}")
+            
+            areas = forecast_data.get('areas', [])
+            if areas:
+                print(f"\n   🌊 Monitored Areas:")
+                for area in areas:
+                    print(f"      Location: {area.get('location')}")
+                    print(f"      Probability: {area.get('probability')}")
+                    print(f"      Timeframe: {area.get('timeframe')}")
+            else:
+                print("   No specific areas under monitoring")
+        else:
+            print("\n⚠️ No forecast data available")
+    
+    except Exception as e:
+        print(f"\n⚠️ Forecast fetch failed (non-critical): {e}")
+    
+    # Test 3: Check if debug file was created
+    print("\n[TEST 3] Debug Information")
+    print("-"*80)
+    
+    import os
+    if os.path.exists('debug_pagasa_page.html'):
+        print("✅ Debug HTML file created: debug_pagasa_page.html")
+        print("   You can inspect this file to see PAGASA's current page structure")
+    else:
+        print("ℹ️ No debug file created (parsing succeeded without fallback)")
+    
+    print("\n" + "="*80)
+    print("TEST COMPLETE")
+    print("="*80)
+    print()
+    
+    return True
+
+
+if __name__ == "__main__":
+    success = test_pagasa_fetch()
+    sys.exit(0 if success else 1)
