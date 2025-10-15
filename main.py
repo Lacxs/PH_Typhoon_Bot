@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fetchers.pagasa_parser import PAGASAParser
 from fetchers.jtwc_parser import JTWCParser
-from fetchers.philvocs_parser import PHILVOLCSParser  # NEW: Earthquake monitoring
+from fetchers.philvocs_parser import PHILVOCSParser  # NEW: Earthquake monitoring
 from processors.compute_eta import PortETACalculator
 from notifiers.telegram_alert import TelegramNotifier
 
@@ -281,7 +281,7 @@ def main():
     pagasa = PAGASAParser()
     jtwc = JTWCParser()
     calculator = PortETACalculator(PORTS)
-    philvocs = PHILVOLCSParser()  # NEW: Earthquake parser
+    philvocs = PHILVOCSParser()  # NEW: Earthquake parser
     notifier = TelegramNotifier(
         token=os.getenv("TELEGRAM_TOKEN"),
         chat_id=os.getenv("TELEGRAM_CHAT_ID")
