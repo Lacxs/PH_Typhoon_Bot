@@ -70,46 +70,52 @@ class PHILVOCSParser:
         earthquakes = []
         
         try:
-            # Find the main table - PHILVOCS uses a specific table structure
-            # Try multiple selectors to find the earthquake data table
-            table = None
+            # PHILVOCS uses a specific table class: "MsoNormalTable"
+            table = soup.find('table', {'class': 'MsoNormalTable'})
             
-            # Method 1: Find table by common attributes
-            table = soup.find('table', {'class': re.compile(r'.*earthquake.*|.*table.*', re.I)})
-            
-            # Method 2: Find the largest table (usually the data table)
             if not table:
-                tables = soup.find_all('table')
-                if tables:
-                    table = max(tables, key=lambda t: len(t.find_all('tr')))
+                # Fallback: try to find by looking for the month/year header
+                logger.warning("MsoNormalTable not found, trying alternative method...")
+                # Look for table that contains "OCTOBER 2025" or similar
+                all_tables = soup.find_all('table')
+                for t in all_tables:
+                    if 'OCTOBER 2025' in t.get_text() or 'Date - Time' in t.get_text():
+                        table = t
+                        break
             
             if not table:
                 logger.warning("Could not find earthquake table")
                 return []
             
-            logger.info(f"Found table with {len(table.find_all('tr'))} rows")
+            logger.info(f"Found earthquake table")
             
-            # Parse table rows
-            rows = table.find_all('tr')
+            # Parse table rows - PHILVOCS structure has the data in tbody
+            tbody = table.find('tbody')
+            if tbody:
+                rows = tbody.find_all('tr')
+            else:
+                rows = table.find_all('tr')
             
-            # Skip header row(s)
-            data_rows = rows[1:] if len(rows) > 1 else []
+            logger.info(f"Found {len(rows)} total rows in table")
             
-            for row in data_rows:
+            # The first few rows are headers, skip them
+            # Look for rows with actual data (6+ columns)
+            data_row_count = 0
+            for row in rows:
                 cols = row.find_all('td')
                 
-                # PHILVOCS table format typically:
-                # Date-Time | Latitude | Longitude | Depth (km) | Magnitude | Location
-                if len(cols) >= 5:
+                # Data rows have 6+ columns: Date-Time, Lat, Lon, Depth, Mag, Location
+                if len(cols) >= 6:
                     try:
                         earthquake = self._parse_earthquake_row(cols)
                         if earthquake:
                             earthquakes.append(earthquake)
+                            data_row_count += 1
                     except Exception as e:
                         logger.debug(f"Error parsing row: {e}")
                         continue
             
-            logger.info(f"Successfully parsed {len(earthquakes)} earthquakes")
+            logger.info(f"Successfully parsed {len(earthquakes)} earthquakes from {data_row_count} data rows")
             
         except Exception as e:
             logger.error(f"Error parsing earthquake table: {e}", exc_info=True)
@@ -119,6 +125,7 @@ class PHILVOCSParser:
     def _parse_earthquake_row(self, cols):
         """Parse a single earthquake table row"""
         try:
+            # PHILVOCS format: Date-Time | Latitude | Longitude | Depth | Magnitude | Location
             # Extract data from columns
             date_time_str = cols[0].get_text(strip=True)
             latitude_str = cols[1].get_text(strip=True)
@@ -127,14 +134,23 @@ class PHILVOCSParser:
             magnitude_str = cols[4].get_text(strip=True)
             location_str = cols[5].get_text(strip=True) if len(cols) > 5 else 'N/A'
             
+            # Skip header rows (they contain text like "Date - Time")
+            if 'Date' in date_time_str or 'Time' in date_time_str or 'Philippine' in date_time_str:
+                return None
+            
             # Parse magnitude (critical field)
             magnitude = self._parse_magnitude(magnitude_str)
             if magnitude is None:
+                logger.debug(f"Could not parse magnitude from: {magnitude_str}")
                 return None
             
             # Parse coordinates
             latitude = self._parse_coordinate(latitude_str)
             longitude = self._parse_coordinate(longitude_str)
+            
+            if latitude is None or longitude is None:
+                logger.debug(f"Could not parse coordinates: {latitude_str}, {longitude_str}")
+                return None
             
             # Parse depth
             depth = self._parse_depth(depth_str)
@@ -153,6 +169,8 @@ class PHILVOCSParser:
                 'source': 'PHILVOCS',
                 'is_significant': magnitude >= self.ALERT_THRESHOLD
             }
+            
+            logger.debug(f"Parsed earthquake: M{magnitude} at {location_str}")
             
             return earthquake
             
@@ -321,7 +339,7 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    parser = PHILVOLCSParser()
+    parser = PHILVOCSParser()
     
     print("=== Testing PHILVOCS Parser ===\n")
     
