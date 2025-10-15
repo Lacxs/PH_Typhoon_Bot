@@ -1,6 +1,6 @@
 """
 Telegram Alert Notifier
-Sends formatted typhoon and LPA alerts to Telegram
+Sends formatted typhoon, LPA, and earthquake alerts to Telegram
 """
 
 import logging
@@ -121,7 +121,7 @@ def create_storm_map(bulletin_data):
 
 
 class TelegramNotifier:
-    """Send typhoon and LPA alerts via Telegram"""
+    """Send typhoon, LPA, and earthquake alerts via Telegram"""
     
     def __init__(self, token, chat_id):
         """
@@ -156,6 +156,62 @@ class TelegramNotifier:
         """Send error notification to admin"""
         message = f"🚨 *Typhoon Bot Error*\n\n```\n{error_message}\n```"
         return self._send_message(message)
+    
+    def send_earthquake_alert(self, earthquake_data):
+        """
+        Send earthquake alert to Telegram
+        
+        Args:
+            earthquake_data: Dictionary containing earthquake information from PHILVOCS
+        """
+        try:
+            magnitude = earthquake_data.get('magnitude', 'N/A')
+            location = earthquake_data.get('location', 'Unknown location')
+            depth = earthquake_data.get('depth_km', 'N/A')
+            datetime_str = earthquake_data.get('datetime_str', 'Unknown time')
+            latitude = earthquake_data.get('latitude', 'N/A')
+            longitude = earthquake_data.get('longitude', 'N/A')
+            
+            # Determine urgency emoji based on magnitude
+            if magnitude >= 7.0:
+                urgency = "🔴🔴🔴 *MAJOR EARTHQUAKE*"
+            elif magnitude >= 6.0:
+                urgency = "🔴🔴 *STRONG EARTHQUAKE*"
+            elif magnitude >= 5.0:
+                urgency = "🔴 *MODERATE EARTHQUAKE*"
+            else:
+                urgency = "⚠️ *EARTHQUAKE DETECTED*"
+            
+            # Build message
+            message = f"{urgency}\n\n"
+            message += f"🌍 *Magnitude:* {magnitude}\n"
+            message += f"📍 *Location:* {location}\n"
+            message += f"📅 *Date/Time:* {datetime_str}\n"
+            message += f"📏 *Depth:* {depth} km\n"
+            message += f"🗺️ *Coordinates:* {latitude}°N, {longitude}°E\n\n"
+            
+            # Add safety information based on magnitude
+            if magnitude >= 6.0:
+                message += "⚠️ *SAFETY REMINDER:*\n"
+                message += "• Drop, Cover, and Hold On\n"
+                message += "• Stay away from windows and glass\n"
+                message += "• Be prepared for aftershocks\n"
+                message += "• Check for structural damage\n"
+                message += "• If near coast and magnitude >7, move to higher ground\n\n"
+            elif magnitude >= 5.0:
+                message += "ℹ️ *SAFETY NOTE:*\n"
+                message += "• Be aware of surroundings\n"
+                message += "• Expect possible aftershocks\n\n"
+            
+            message += f"📊 Source: PHILVOCS\n"
+            message += f"🕐 Alert sent: {datetime.now(PHT).strftime('%Y-%m-%d %I:%M %p PHT')}"
+            
+            # Send the message
+            return self._send_message(message)
+            
+        except Exception as e:
+            logger.error(f"Error sending earthquake alert: {e}")
+            return False
     
     def _format_lpa_message(self, data):
         """Format LPA alert message"""
@@ -554,7 +610,7 @@ class TelegramNotifier:
     
     def send_test_message(self):
         """Send a test message to verify bot configuration"""
-        message = "✅ *Typhoon Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon and LPA alerts here."
+        message = "✅ *Typhoon & Earthquake Monitor Bot*\n\nBot is configured and running!\n\n🔔 You will receive typhoon, LPA, and earthquake alerts here."
         return self._send_message(message)
     
     def send_status_update(self, forecast_data=None):
