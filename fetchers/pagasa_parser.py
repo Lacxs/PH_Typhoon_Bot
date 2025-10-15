@@ -7,11 +7,11 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class PAGASAParser:
-    """Parser for PAGASA weather data from the NEW bagong.pagasa.dost.gov.ph site"""
+    """Parser for PAGASA weather data from the NEW tropical cyclone bulletin site"""
     
-    # NEW SITE URLs
+    # UPDATED URLS - Using the new severe weather bulletin page
+    BULLETIN_URL = "https://bagong.pagasa.dost.gov.ph/tropical-cyclone/severe-weather-bulletin"
     WEATHER_URL = "https://bagong.pagasa.dost.gov.ph/weather"
-    METAFILE_URL = "https://pubfiles.pagasa.dost.gov.ph/pagasaweb/files/weather/metafile.txt"
     
     def __init__(self):
         self.session = requests.Session()
@@ -20,57 +20,43 @@ class PAGASAParser:
         })
     
     def fetch_weather_data(self):
-        """Fetch weather data from PAGASA's NEW website"""
+        """Fetch weather data from PAGASA's NEW tropical cyclone bulletin"""
         try:
-            logger.info(f"Fetching NEW PAGASA weather page: {self.WEATHER_URL}")
-            response = self.session.get(self.WEATHER_URL, timeout=30)
+            logger.info(f"Fetching PAGASA bulletin: {self.BULLETIN_URL}")
+            response = self.session.get(self.BULLETIN_URL, timeout=30)
             response.raise_for_status()
             
-            logger.info(f"Weather page fetched, length: {len(response.text)} chars")
+            logger.info(f"Bulletin page fetched, length: {len(response.text)} chars")
+            
+            # Save debug copy
+            with open('debug_pagasa_bulletin.html', 'w', encoding='utf-8') as f:
+                f.write(response.text)
             
             soup = BeautifulSoup(response.text, 'html.parser')
+            content = soup.get_text()
             
-            # Look for the TC Information section
-            tc_data = self._parse_tc_table(soup)
+            # Check if there's an active tropical cyclone
+            if 'no tropical cyclone' in content.lower() or len(content.strip()) < 200:
+                logger.info("No active tropical cyclone")
+                return None
+            
+            # Parse the bulletin
+            tc_data = self._parse_bulletin(soup, content)
             
             if tc_data:
                 logger.info(f"Found TC data: {tc_data.get('name', 'Unknown')}")
                 return tc_data
             
-            # If no TC, check for LPA
-            lpa_data = self._parse_lpa_data(soup)
-            
-            if lpa_data:
-                logger.info(f"Found LPA data")
-                return lpa_data
-            
-            logger.info("No active tropical cyclone or LPA found")
+            logger.info("No active tropical cyclone found in bulletin")
             return None
             
         except Exception as e:
-            logger.error(f"Error fetching weather data: {e}")
+            logger.error(f"Error fetching bulletin: {e}", exc_info=True)
             return None
     
-    def _parse_tc_table(self, soup):
-        """Parse the Tropical Cyclone table from the new site"""
+    def _parse_bulletin(self, soup, content):
+        """Parse the severe weather bulletin content"""
         try:
-            # Find the TC Information section
-            tc_section = soup.find('h3', string=re.compile(r'TC Information', re.I))
-            
-            if not tc_section:
-                logger.info("No TC Information section found")
-                return None
-            
-            # Find the table after the TC Information heading
-            table = tc_section.find_next('table')
-            
-            if not table:
-                logger.info("No TC table found")
-                return None
-            
-            # Extract all table rows
-            rows = table.find_all('tr')
-            
             tc_data = {
                 'name': None,
                 'location': None,
@@ -79,137 +65,136 @@ class PAGASAParser:
                 'max_winds': None,
                 'gustiness': None,
                 'movement': None,
-                'category': None
+                'category': None,
+                'issued_time': None,
+                'tcws_areas': {}
             }
             
-            # First pass: look for the TC name/type in ALL table text
-            all_table_text = table.get_text()
-            logger.info(f"Full table text (first 300 chars): {all_table_text[:300]}")
-            
-            # Extract category from table text - CHECK IN ORDER OF SPECIFICITY
-            if 'SUPER TYPHOON' in all_table_text.upper():
-                tc_data['category'] = 'Super Typhoon'
-            elif 'SEVERE TROPICAL STORM' in all_table_text.upper():
-                tc_data['category'] = 'Severe Tropical Storm'
-            elif 'TROPICAL STORM' in all_table_text.upper():
-                tc_data['category'] = 'Tropical Storm'
-            elif 'TROPICAL DEPRESSION' in all_table_text.upper():
-                tc_data['category'] = 'Tropical Depression'
-            elif 'TYPHOON' in all_table_text.upper():
-                tc_data['category'] = 'Typhoon'
-            else:
-                # Fallback
-                tc_data['category'] = 'Tropical Cyclone'
-            
-            logger.info(f"Detected category: {tc_data['category']}")
-            
-            # Check if outside PAR (this is a LOCATION, not a category)
-            is_outside_par = 'OUTSIDE PAR' in all_table_text.upper()
-            logger.info(f"Outside PAR: {is_outside_par}")
-            
-            # Try to extract Philippine name (in quotes or parentheses)
-            name_match = re.search(r'["\']([A-Z][a-z]+)["\']|\(([A-Z][a-z]+)\)', all_table_text)
-            if name_match:
-                tc_data['name'] = name_match.group(1) or name_match.group(2)
-                logger.info(f"Found TC name: {tc_data['name']}")
-            else:
-                # No Philippine name - use category with location context
-                if is_outside_par and tc_data['category']:
-                    tc_data['name'] = f"{tc_data['category']} (Outside PAR)"
-                elif tc_data['category']:
-                    tc_data['name'] = tc_data['category']
+            # Extract cyclone name from heading (e.g., Tropical Depression "Crising")
+            heading = soup.find('h1') or soup.find('h2') or soup.find('h3')
+            if heading:
+                heading_text = heading.get_text(strip=True)
+                logger.info(f"Bulletin heading: {heading_text}")
+                
+                # Extract category (Tropical Depression, Tropical Storm, Typhoon, etc.)
+                category_patterns = [
+                    r'SUPER TYPHOON',
+                    r'SEVERE TROPICAL STORM',
+                    r'TROPICAL STORM',
+                    r'TROPICAL DEPRESSION',
+                    r'TYPHOON'
+                ]
+                
+                for pattern in category_patterns:
+                    if re.search(pattern, heading_text, re.I):
+                        tc_data['category'] = pattern.replace('_', ' ').title()
+                        break
+                
+                # Extract Philippine name (in quotes)
+                name_match = re.search(r'["\']([A-Z][a-z]+)["\']', heading_text)
+                if name_match:
+                    tc_data['name'] = name_match.group(1)
                 else:
-                    tc_data['name'] = 'Unknown System'
-                logger.info(f"No proper name found, using: {tc_data['name']}")
+                    tc_data['name'] = tc_data['category'] if tc_data['category'] else 'Unknown System'
             
-            logger.info(f"Extracted category: {tc_data['category']}, name: {tc_data['name']}")
+            # Extract issued time
+            time_match = re.search(r'Issued at (\d+:\d+\s+[ap]m),\s+(\d+\s+\w+\s+\d{4})', content, re.IGNORECASE)
+            if time_match:
+                tc_data['issued_time'] = f"{time_match.group(1)}, {time_match.group(2)}"
             
-            # Second pass: parse individual data rows
-            for row in rows:
-                cells = row.find_all('td')
-                if not cells:
-                    continue
-                
-                text = ' '.join(cell.get_text(strip=True) for cell in cells)
-                
-                if 'LOCATION:' in text.upper():
-                    # Extract coordinates
-                    coord_match = re.search(r'(\d+\.?\d*)\s*°?\s*([NS])\s*,?\s*(\d+\.?\d*)\s*°?\s*([EW])', text)
-                    if coord_match:
-                        lat = float(coord_match.group(1))
-                        if coord_match.group(2) == 'S':
-                            lat = -lat
-                        lon = float(coord_match.group(3))
-                        if coord_match.group(4) == 'W':
-                            lon = -lon
-                        
-                        tc_data['lat'] = lat
-                        tc_data['lon'] = lon
-                        tc_data['location'] = text.split('LOCATION:')[1].strip()
-                
-                elif 'MAXIMUM SUSTAINED WINDS:' in text.upper():
-                    wind_match = re.search(r'(\d+)\s*KM/H', text, re.I)
-                    if wind_match:
-                        tc_data['max_winds'] = int(wind_match.group(1))
-                
-                elif 'GUSTINESS:' in text.upper():
-                    gust_match = re.search(r'(\d+)\s*KM/H', text, re.I)
-                    if gust_match:
-                        tc_data['gustiness'] = int(gust_match.group(1))
-                
-                elif 'MOVEMENT:' in text.upper():
-                    tc_data['movement'] = text.split('MOVEMENT:')[1].strip()
+            # Extract location coordinates
+            # Pattern: "14.7 °N, 128.4 °E" or similar
+            coord_pattern = r'(\d+\.?\d*)\s*°?\s*([NS])\s*,?\s*(\d+\.?\d*)\s*°?\s*([EW])'
+            coord_match = re.search(coord_pattern, content)
             
-            # Check if we have valid data
-            if tc_data['lat'] and tc_data['lon']:
-                logger.info(f"Successfully parsed TC: {tc_data}")
-                return tc_data
-            else:
-                logger.warning("TC table found but coordinates missing")
-                return None
-                
-        except Exception as e:
-            logger.error(f"Error parsing TC table: {e}")
-            return None
-    
-    def _parse_lpa_data(self, soup):
-        """Parse Low Pressure Area data"""
-        try:
-            # Look for "Low Pressure Area" or "LPA" text
-            text = soup.get_text()
-            
-            if 'low pressure area' not in text.lower() and 'lpa' not in text.lower():
-                logger.info("No LPA mentioned on page")
-                return None
-            
-            # Try to extract LPA coordinates
-            lpa_pattern = r'(?:Low Pressure Area|LPA)[^\d]*?(\d+\.?\d*)\s*°?\s*([NS])[^\d]*?(\d+\.?\d*)\s*°?\s*([EW])'
-            
-            match = re.search(lpa_pattern, text, re.I | re.DOTALL)
-            
-            if match:
-                lat = float(match.group(1))
-                if match.group(2) == 'S':
+            if coord_match:
+                lat = float(coord_match.group(1))
+                if coord_match.group(2) == 'S':
                     lat = -lat
-                lon = float(match.group(3))
-                if match.group(4) == 'W':
+                lon = float(coord_match.group(3))
+                if coord_match.group(4) == 'W':
                     lon = -lon
                 
-                logger.info(f"Found LPA at {lat}°N, {lon}°E")
+                tc_data['lat'] = lat
+                tc_data['lon'] = lon
                 
-                return {
-                    'name': 'LPA',
-                    'lat': lat,
-                    'lon': lon,
-                    'category': 'Low Pressure Area'
-                }
+                # Extract location description
+                location_match = re.search(r'(\d+)\s+km\s+([\w\s]+)\s+of\s+([\w\s,]+)', content, re.IGNORECASE)
+                if location_match:
+                    tc_data['location'] = f"{location_match.group(1)} km {location_match.group(2)} of {location_match.group(3)}"
             
-            logger.info("LPA mentioned but coordinates not found")
+            # Extract movement
+            movement_match = re.search(r'Moving\s+([\w\s]+)\s+at\s+(\d+)\s+km/h', content, re.IGNORECASE)
+            if movement_match:
+                tc_data['movement'] = f"{movement_match.group(1)} at {movement_match.group(2)} km/h"
+            
+            # Extract wind speed
+            wind_match = re.search(r'Maximum sustained winds of\s+(\d+)\s+km/h', content, re.IGNORECASE)
+            if wind_match:
+                tc_data['max_winds'] = int(wind_match.group(1))
+            
+            # Extract gustiness
+            gust_match = re.search(r'gustiness of up to\s+(\d+)\s+km/h', content, re.IGNORECASE)
+            if gust_match:
+                tc_data['gustiness'] = int(gust_match.group(1))
+            
+            # Extract TCWS areas
+            tc_data['tcws_areas'] = self._parse_tcws_areas(soup, content)
+            
+            # Validate we have minimum required data
+            if tc_data['lat'] and tc_data['lon']:
+                logger.info(f"Successfully parsed bulletin: {tc_data['name']}")
+                return tc_data
+            else:
+                logger.warning("Bulletin found but coordinates missing")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error parsing bulletin: {e}", exc_info=True)
             return None
+    
+    def _parse_tcws_areas(self, soup, content):
+        """Parse Tropical Cyclone Wind Signal areas"""
+        tcws_areas = {}
+        
+        try:
+            # Look for Wind Signal section
+            # Pattern: "Tropical Cyclone Wind Signal no. 1" or "Wind Signal No. 1"
+            signal_sections = re.findall(
+                r'(?:Tropical Cyclone )?Wind Signal (?:no\.|No\.) ?(\d+)[:\s]*(.*?)(?=(?:Tropical Cyclone )?Wind Signal|$)',
+                content,
+                re.IGNORECASE | re.DOTALL
+            )
+            
+            for signal_num, areas_text in signal_sections:
+                signal_level = int(signal_num)
+                
+                # Extract area names (typically comma or newline separated)
+                # Clean up the text
+                areas_text = re.sub(r'\s+', ' ', areas_text)
+                
+                # Split by commas, "and", semicolons
+                areas = re.split(r'[,;]|\s+and\s+', areas_text)
+                
+                # Clean and filter areas
+                cleaned_areas = []
+                for area in areas:
+                    area = area.strip()
+                    # Remove empty strings and common noise words
+                    if area and len(area) > 2 and not area.lower() in ['the', 'of', 'in', 'including']:
+                        # Remove parenthetical information for cleaner names
+                        area = re.sub(r'\([^)]*\)', '', area).strip()
+                        if area:
+                            cleaned_areas.append(area)
+                
+                if cleaned_areas:
+                    tcws_areas[signal_level] = cleaned_areas
+                    logger.info(f"Found TCWS #{signal_level}: {len(cleaned_areas)} areas")
             
         except Exception as e:
-            logger.error(f"Error parsing LPA data: {e}")
-            return None
+            logger.warning(f"Error parsing TCWS areas: {e}")
+        
+        return tcws_areas
     
     def fetch_threat_forecast(self):
         """Fetch 5-day TC threat forecast status"""
@@ -217,18 +202,29 @@ class PAGASAParser:
             logger.info("Fetching 5-day TC threat forecast...")
             response = self.session.get(self.WEATHER_URL, timeout=30)
             
-            # Check if there's any mention of monitoring areas
-            if 'being monitored' in response.text.lower() or 'no threat' in response.text.lower():
-                logger.info("Threat forecast: Areas being monitored")
-                return "Areas being monitored for potential development"
+            content = response.text.lower()
             
-            return "No specific threat information available"
+            # Check for threat indicators
+            if 'being monitored' in content:
+                return {
+                    'has_threat': True,
+                    'summary': 'Areas being monitored for potential tropical cyclone development'
+                }
+            elif 'no threat' in content or 'fair weather' in content:
+                return {
+                    'has_threat': False,
+                    'summary': 'No immediate tropical cyclone threat'
+                }
+            
+            return {
+                'has_threat': False,
+                'summary': 'Weather conditions normal'
+            }
             
         except Exception as e:
             logger.error(f"Error fetching threat forecast: {e}")
             return None
     
-    # COMPATIBILITY METHOD - for backwards compatibility with existing main.py
     def fetch_latest_bulletin(self):
         """
         Compatibility wrapper for fetch_weather_data()
@@ -248,53 +244,48 @@ class PAGASAParser:
         if not system_name or system_name.lower() in ['none', 'unknown']:
             system_name = system_category
         
-        # Determine the type description
-        if 'outside par' in system_category.lower():
-            type_desc = f"{system_category}"
-        else:
-            type_desc = system_category
+        # Parse movement if available (e.g., "NORTHWESTWARD AT 35 KM/H")
+        movement = raw_data.get('movement', '')
+        movement_direction = None
+        movement_speed = None
+        
+        if movement:
+            # Extract direction
+            direction_match = re.search(r'(NORTH|SOUTH|EAST|WEST|NORTHWEST|NORTHEAST|SOUTHWEST|SOUTHEAST)(?:WARD)?', movement, re.I)
+            if direction_match:
+                movement_direction = direction_match.group(1).upper()
+            
+            # Extract speed
+            speed_match = re.search(r'(\d+)\s*km/h', movement, re.I)
+            if speed_match:
+                movement_speed = int(speed_match.group(1))
         
         # Convert to the format main.py expects
         bulletin_data = {
             'name': system_name,
             'latitude': raw_data.get('lat'),
             'longitude': raw_data.get('lon'),
-            'bulletin_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'type': type_desc,
-            'movement_direction': None,
-            'movement_speed': None,
+            'bulletin_time': raw_data.get('issued_time') or datetime.now().strftime('%Y-%m-%d %I:%M %p'),
+            'type': system_category,
+            'movement_direction': movement_direction,
+            'movement_speed': movement_speed,
             'max_winds': raw_data.get('max_winds'),
             'max_gusts': raw_data.get('gustiness'),
-            'tcws_areas': {},
-            'next_bulletin': None
+            'tcws_areas': raw_data.get('tcws_areas', {}),
+            'next_bulletin': None,
+            'source': 'PAGASA'
         }
-        
-        # Parse movement if available (e.g., "NORTHWESTWARD AT 35 KM/H")
-        movement = raw_data.get('movement', '')
-        if movement:
-            # Extract direction
-            direction_match = re.search(r'(NORTH|SOUTH|EAST|WEST|NORTHWEST|NORTHEAST|SOUTHWEST|SOUTHEAST)(?:WARD)?', movement, re.I)
-            if direction_match:
-                bulletin_data['movement_direction'] = direction_match.group(1).upper()
-            
-            # Extract speed
-            speed_match = re.search(r'(\d+)\s*KM/H', movement, re.I)
-            if speed_match:
-                bulletin_data['movement_speed'] = int(speed_match.group(1))
         
         logger.info(f"Bulletin data prepared: name={bulletin_data['name']}, type={bulletin_data['type']}, lat={bulletin_data['latitude']}, lon={bulletin_data['longitude']}")
         
         return bulletin_data
     
     def get_bulletin_text(self):
-        """
-        Return a text summary of the current weather situation
-        Compatible with old code that expects bulletin text
-        """
+        """Return a text summary of the current weather situation"""
         data = self.fetch_weather_data()
         
         if not data:
-            return "No active tropical cyclone or low pressure area"
+            return "No active tropical cyclone"
         
         # Format the data as text
         text_parts = []
@@ -320,16 +311,19 @@ class PAGASAParser:
         if data.get('movement'):
             text_parts.append(f"Movement: {data['movement']}")
         
+        if data.get('issued_time'):
+            text_parts.append(f"Issued: {data['issued_time']}")
+        
         return "\n".join(text_parts)
 
 
-# Usage example
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     
     parser = PAGASAParser()
     
     # Test new method
+    print("=== Testing Weather Data Fetch ===")
     data = parser.fetch_weather_data()
     if data:
         print(f"Found weather system: {data}")
@@ -337,10 +331,10 @@ if __name__ == "__main__":
         print("No active weather system")
     
     # Test compatibility method
-    print("\n--- Testing compatibility method ---")
+    print("\n=== Testing Compatibility Method ===")
     bulletin = parser.fetch_latest_bulletin()
     print(bulletin)
     
-    print("\n--- Testing bulletin text ---")
+    print("\n=== Testing Bulletin Text ===")
     text = parser.get_bulletin_text()
     print(text)
