@@ -58,24 +58,12 @@ jobs:
           FORCE_STATUS_REPORT: ${{ github.event.inputs.force_status_report }}
         run: python main.py
       
-      - name: Upload bulletin archive (on failure)
+      - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: bulletin-logs
-          path: data/
+          name: bot-logs
+          path: |
+            data/
+            debug_*.html
           retention-days: 7
-      
-      - name: Commit bulletin archive (optional)
-        if: success()
-        continue-on-error: true
-        run: |
-          if [ -f data/bulletin_archive.json ]; then
-            git config --local user.email "github-actions[bot]@users.noreply.github.com"
-            git config --local user.name "github-actions[bot]"
-            git add data/bulletin_archive.json
-            git diff --quiet && git diff --staged --quiet || git commit -m "Archive bulletin data [skip ci]"
-            git push
-          else
-            echo "No bulletin archive to commit"
-          fi
