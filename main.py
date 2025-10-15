@@ -395,45 +395,47 @@ def main():
         logger.info("="*60)
         
         try:
-            # Fetch significant earthquakes (magnitude >= 3.8 in last 24 hours)
-            significant_earthquakes = philvocs.get_significant_earthquakes(hours=24)
+            # Fetch recent earthquakes from PHILVOCS
+            all_earthquakes = philvocs.fetch_recent_earthquakes(limit=50)
             
-            if significant_earthquakes:
-                logger.info(f"Found {len(significant_earthquakes)} significant earthquake(s) in last 24 hours")
+            if all_earthquakes:
+                logger.info(f"Fetched {len(all_earthquakes)} recent earthquakes from PHILVOCS")
                 
-                # Get the most recent significant earthquake
-                latest_eq = significant_earthquakes[0]
-                magnitude = latest_eq.get('magnitude', 'N/A')
-                location = latest_eq.get('location', 'Unknown')
+                # Find the FIRST earthquake >= 3.8 (most recent significant one)
+                latest_significant = None
+                for eq in all_earthquakes:
+                    if eq.get('magnitude', 0) >= 3.8:
+                        latest_significant = eq
+                        break  # Found it, stop looking
                 
-                logger.info(f"Latest: M{magnitude} - {location}")
-                
-                # Check cache to avoid duplicate alerts
-                cached_eq = load_earthquake_cache()
-                
-                if should_send_earthquake_alert(latest_eq, cached_eq):
-                    logger.info(f"📢 NEW EARTHQUAKE DETECTED - Sending alert...")
-                    logger.info(f"   Magnitude: {magnitude}")
-                    logger.info(f"   Location: {location}")
-                    logger.info(f"   Time: {latest_eq.get('datetime_str')}")
+                if latest_significant:
+                    magnitude = latest_significant.get('magnitude', 'N/A')
+                    location = latest_significant.get('location', 'Unknown')
+                    time_str = latest_significant.get('datetime_str', 'Unknown time')
                     
-                    # Send earthquake alert
-                    notifier.send_earthquake_alert(latest_eq)
+                    logger.info(f"📍 Last known earthquake ≥3.8:")
+                    logger.info(f"   M{magnitude} - {location}")
+                    logger.info(f"   Time: {time_str}")
                     
-                    # Save to cache to prevent duplicate alerts
-                    save_earthquake_cache(latest_eq)
+                    # Check if we already reported this one
+                    cached_eq = load_earthquake_cache()
                     
-                    logger.info("✅ Earthquake alert sent successfully")
+                    if should_send_earthquake_alert(latest_significant, cached_eq):
+                        logger.info(f"📢 NEW - Sending alert...")
+                        
+                        # Send earthquake alert
+                        notifier.send_earthquake_alert(latest_significant)
+                        
+                        # Save to cache
+                        save_earthquake_cache(latest_significant)
+                        
+                        logger.info("✅ Earthquake alert sent")
+                    else:
+                        logger.info("⏭️  Already reported this earthquake, skipping")
                 else:
-                    logger.info("⏭️  Earthquake already reported, skipping duplicate alert")
-                
-                # If there are multiple significant earthquakes, log them
-                if len(significant_earthquakes) > 1:
-                    logger.info(f"📊 Other significant earthquakes detected:")
-                    for eq in significant_earthquakes[1:5]:  # Log up to 4 more
-                        logger.info(f"   - M{eq.get('magnitude')} at {eq.get('location')}")
+                    logger.info("✅ No earthquakes ≥3.8 found in recent data")
             else:
-                logger.info("✅ No significant earthquakes detected (magnitude >= 3.8)")
+                logger.warning("⚠️  Could not fetch earthquake data from PHILVOCS")
         
         except Exception as e:
             logger.warning(f"⚠️  Error checking earthquakes (non-critical): {e}")
