@@ -51,6 +51,13 @@ class PHILVOCSParser:
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
+            # Debug: Check if we can find earthquake data in text
+            page_text = soup.get_text()
+            if '15 October 2025' in page_text:
+                logger.info("✅ Page contains recent earthquake data")
+            else:
+                logger.warning("⚠️ Page might not have loaded earthquake data")
+            
             # Parse the earthquake table
             earthquakes = self._parse_earthquake_table(soup)
             
@@ -70,52 +77,39 @@ class PHILVOCSParser:
         earthquakes = []
         
         try:
-            # PHILVOCS uses a specific table class: "MsoNormalTable"
-            table = soup.find('table', {'class': 'MsoNormalTable'})
+            # PHILVOCS uses multiple tables with class "MsoNormalTable"
+            # Find ALL tables with this class
+            tables = soup.find_all('table', {'class': 'MsoNormalTable'})
             
-            if not table:
-                # Fallback: try to find by looking for the month/year header
-                logger.warning("MsoNormalTable not found, trying alternative method...")
-                # Look for table that contains "OCTOBER 2025" or similar
-                all_tables = soup.find_all('table')
-                for t in all_tables:
-                    if 'OCTOBER 2025' in t.get_text() or 'Date - Time' in t.get_text():
-                        table = t
-                        break
-            
-            if not table:
-                logger.warning("Could not find earthquake table")
+            if not tables:
+                logger.warning("No MsoNormalTable found")
                 return []
             
-            logger.info(f"Found earthquake table")
+            logger.info(f"Found {len(tables)} MsoNormalTable(s)")
             
-            # Parse table rows - PHILVOCS structure has the data in tbody
-            tbody = table.find('tbody')
-            if tbody:
-                rows = tbody.find_all('tr')
-            else:
+            # Process each table
+            total_rows_processed = 0
+            for table_idx, table in enumerate(tables):
+                # Get ALL tr elements directly from table (don't rely on tbody)
                 rows = table.find_all('tr')
-            
-            logger.info(f"Found {len(rows)} total rows in table")
-            
-            # The first few rows are headers, skip them
-            # Look for rows with actual data (6+ columns)
-            data_row_count = 0
-            for row in rows:
-                cols = row.find_all('td')
                 
-                # Data rows have 6+ columns: Date-Time, Lat, Lon, Depth, Mag, Location
-                if len(cols) >= 6:
-                    try:
-                        earthquake = self._parse_earthquake_row(cols)
-                        if earthquake:
-                            earthquakes.append(earthquake)
-                            data_row_count += 1
-                    except Exception as e:
-                        logger.debug(f"Error parsing row: {e}")
-                        continue
+                logger.info(f"Table {table_idx + 1}: Found {len(rows)} rows")
+                
+                for row in rows:
+                    cols = row.find_all('td')
+                    
+                    # Data rows should have 6+ columns
+                    if len(cols) >= 6:
+                        total_rows_processed += 1
+                        try:
+                            earthquake = self._parse_earthquake_row(cols)
+                            if earthquake:
+                                earthquakes.append(earthquake)
+                        except Exception as e:
+                            logger.debug(f"Error parsing row: {e}")
+                            continue
             
-            logger.info(f"Successfully parsed {len(earthquakes)} earthquakes from {data_row_count} data rows")
+            logger.info(f"Processed {total_rows_processed} data rows, successfully parsed {len(earthquakes)} earthquakes")
             
         except Exception as e:
             logger.error(f"Error parsing earthquake table: {e}", exc_info=True)
