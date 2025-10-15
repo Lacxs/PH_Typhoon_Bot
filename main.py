@@ -1,6 +1,6 @@
 """
-Philippine Typhoon Monitoring Bot
-Main orchestrator for PAGASA + JTWC bulletin tracking
+Philippine Typhoon & Earthquake Monitoring Bot
+Main orchestrator for PAGASA + JTWC bulletin tracking + PHILVOCS earthquake monitoring
 """
 
 import os
@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fetchers.pagasa_parser import PAGASAParser
 from fetchers.jtwc_parser import JTWCParser
+from fetchers.philvocs_parser import PHILVOLCSParser  # NEW: Earthquake monitoring
 from processors.compute_eta import PortETACalculator
 from notifiers.telegram_alert import TelegramNotifier
 
@@ -33,10 +34,12 @@ PORTS = {
     "MICTSI": (8.5533, 124.7667)      # Mindanao International Container Terminal
 }
 
+# Cache files
 CACHE_FILE = Path("data/last_bulletin.json")
 ARCHIVE_FILE = Path("data/bulletin_archive.json")
 STATUS_FILE = Path("data/last_status_update.json")
 THREAT_FILE = Path("data/last_threat_detected.json")
+EARTHQUAKE_CACHE_FILE = Path("data/last_earthquake.json")  # NEW: Earthquake cache
 
 
 def check_threat_level(port_status):
@@ -212,9 +215,59 @@ def save_status_update():
         }, f, indent=2)
 
 
+# ============================================================
+# EARTHQUAKE MONITORING FUNCTIONS (NEW)
+# ============================================================
+
+def load_earthquake_cache():
+    """Load the last significant earthquake data"""
+    if EARTHQUAKE_CACHE_FILE.exists():
+        with open(EARTHQUAKE_CACHE_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+
+def save_earthquake_cache(earthquake_data):
+    """Save earthquake data to cache"""
+    EARTHQUAKE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(EARTHQUAKE_CACHE_FILE, 'w') as f:
+        json.dump(earthquake_data, f, indent=2, default=str)
+
+
+def should_send_earthquake_alert(current_eq, cached_eq):
+    """
+    Determine if we should send an earthquake alert
+    Send if: new earthquake, or significant changes detected
+    """
+    if not cached_eq:
+        return True
+    
+    # Check if it's a different earthquake (different time)
+    if current_eq.get('datetime_str') != cached_eq.get('datetime_str'):
+        return True
+    
+    # Check if location changed significantly (shouldn't happen, but safety check)
+    if current_eq.get('location') != cached_eq.get('location'):
+        return True
+    
+    # Check if magnitude changed (shouldn't happen, but safety check)
+    current_mag = current_eq.get('magnitude', 0)
+    cached_mag = cached_eq.get('magnitude', 0)
+    if abs(current_mag - cached_mag) > 0.2:
+        return True
+    
+    return False
+
+
+# ============================================================
+# MAIN EXECUTION
+# ============================================================
+
 def main():
     """Main execution flow"""
-    logger.info("Starting Typhoon Monitor Bot...")
+    logger.info("="*80)
+    logger.info("Starting Typhoon & Earthquake Monitor Bot...")
+    logger.info("="*80)
     
     # Check if we should skip this run (adaptive frequency)
     if should_skip_run():
@@ -228,12 +281,21 @@ def main():
     pagasa = PAGASAParser()
     jtwc = JTWCParser()
     calculator = PortETACalculator(PORTS)
+    philvocs = PHILVOLCSParser()  # NEW: Earthquake parser
     notifier = TelegramNotifier(
         token=os.getenv("TELEGRAM_TOKEN"),
         chat_id=os.getenv("TELEGRAM_CHAT_ID")
     )
     
     try:
+        # ============================================================
+        # TYPHOON MONITORING SECTION
+        # ============================================================
+        logger.info("")
+        logger.info("="*60)
+        logger.info("CHECKING FOR TROPICAL CYCLONES")
+        logger.info("="*60)
+        
         # Fetch PAGASA data
         logger.info("Fetching PAGASA bulletin...")
         pagasa_data = pagasa.fetch_latest_bulletin()
@@ -259,71 +321,126 @@ def main():
                 notifier.send_status_update(forecast_data)
                 save_status_update()
             
-            return
-        
-        logger.info(f"Found active cyclone: {pagasa_data.get('name', 'Unknown')}")
-        
-        # Fetch JTWC data (optional, for forecast guidance)
-        jtwc_data = None
-        try:
-            logger.info("Fetching JTWC forecast guidance...")
-            jtwc_data = jtwc.fetch_latest_forecast(pagasa_data.get('name'))
-        except Exception as e:
-            logger.warning(f"JTWC fetch failed (non-critical): {e}")
-        
-        # Calculate port status
-        logger.info("Calculating port distances and ETAs...")
-        port_status = calculator.calculate_all_ports(
-            lat=pagasa_data['latitude'],
-            lon=pagasa_data['longitude'],
-            movement_dir=pagasa_data.get('movement_direction'),
-            movement_speed=pagasa_data.get('movement_speed'),
-            tcws_data=pagasa_data.get('tcws_areas', {})
-        )
-        
-        # Build complete bulletin data
-        bulletin_data = {
-            "bulletin_time": pagasa_data.get('bulletin_time'),
-            "cyclone_name": pagasa_data.get('name'),
-            "type": pagasa_data.get('type', 'Tropical Cyclone'),
-            "location": {
-                "latitude": pagasa_data['latitude'],
-                "longitude": pagasa_data['longitude']
-            },
-            "movement": {
-                "direction": pagasa_data.get('movement_direction'),
-                "speed": pagasa_data.get('movement_speed')
-            },
-            "intensity": {
-                "winds": pagasa_data.get('max_winds'),
-                "gusts": pagasa_data.get('max_gusts')
-            },
-            "port_status": port_status,
-            "next_bulletin": pagasa_data.get('next_bulletin'),
-            "jtwc_available": jtwc_data is not None
-        }
-        
-        # Check and save threat level
-        has_elevated_threat = check_threat_level(port_status)
-        save_threat_status(has_elevated_threat)
-        
-        if has_elevated_threat:
-            logger.info("Elevated threat detected (TCWS #2+) - hourly monitoring activated")
-        
-        # Check if we should send alert
-        cached = load_cache()
-        
-        if should_send_alert(bulletin_data, cached):
-            logger.info("Sending Telegram alert...")
-            notifier.send_alert(bulletin_data)
-            
-            # Save to cache and archive
-            save_cache(bulletin_data)
-            archive_bulletin(bulletin_data)
-            
-            logger.info("Alert sent successfully")
         else:
-            logger.info("No significant changes detected, skipping alert")
+            logger.info(f"Found active cyclone: {pagasa_data.get('name', 'Unknown')}")
+            
+            # Fetch JTWC data (optional, for forecast guidance)
+            jtwc_data = None
+            try:
+                logger.info("Fetching JTWC forecast guidance...")
+                jtwc_data = jtwc.fetch_latest_forecast(pagasa_data.get('name'))
+            except Exception as e:
+                logger.warning(f"JTWC fetch failed (non-critical): {e}")
+            
+            # Calculate port status
+            logger.info("Calculating port distances and ETAs...")
+            port_status = calculator.calculate_all_ports(
+                lat=pagasa_data['latitude'],
+                lon=pagasa_data['longitude'],
+                movement_dir=pagasa_data.get('movement_direction'),
+                movement_speed=pagasa_data.get('movement_speed'),
+                tcws_data=pagasa_data.get('tcws_areas', {})
+            )
+            
+            # Build complete bulletin data
+            bulletin_data = {
+                "bulletin_time": pagasa_data.get('bulletin_time'),
+                "cyclone_name": pagasa_data.get('name'),
+                "type": pagasa_data.get('type', 'Tropical Cyclone'),
+                "location": {
+                    "latitude": pagasa_data['latitude'],
+                    "longitude": pagasa_data['longitude']
+                },
+                "movement": {
+                    "direction": pagasa_data.get('movement_direction'),
+                    "speed": pagasa_data.get('movement_speed')
+                },
+                "intensity": {
+                    "winds": pagasa_data.get('max_winds'),
+                    "gusts": pagasa_data.get('max_gusts')
+                },
+                "port_status": port_status,
+                "next_bulletin": pagasa_data.get('next_bulletin'),
+                "jtwc_available": jtwc_data is not None
+            }
+            
+            # Check and save threat level
+            has_elevated_threat = check_threat_level(port_status)
+            save_threat_status(has_elevated_threat)
+            
+            if has_elevated_threat:
+                logger.info("Elevated threat detected (TCWS #2+) - hourly monitoring activated")
+            
+            # Check if we should send alert
+            cached = load_cache()
+            
+            if should_send_alert(bulletin_data, cached):
+                logger.info("Sending Telegram alert...")
+                notifier.send_alert(bulletin_data)
+                
+                # Save to cache and archive
+                save_cache(bulletin_data)
+                archive_bulletin(bulletin_data)
+                
+                logger.info("Alert sent successfully")
+            else:
+                logger.info("No significant changes detected, skipping alert")
+        
+        # ============================================================
+        # EARTHQUAKE MONITORING SECTION (NEW)
+        # ============================================================
+        logger.info("")
+        logger.info("="*60)
+        logger.info("CHECKING FOR SIGNIFICANT EARTHQUAKES")
+        logger.info("="*60)
+        
+        try:
+            # Fetch significant earthquakes (magnitude >= 3.8 in last 24 hours)
+            significant_earthquakes = philvocs.get_significant_earthquakes(hours=24)
+            
+            if significant_earthquakes:
+                logger.info(f"Found {len(significant_earthquakes)} significant earthquake(s) in last 24 hours")
+                
+                # Get the most recent significant earthquake
+                latest_eq = significant_earthquakes[0]
+                magnitude = latest_eq.get('magnitude', 'N/A')
+                location = latest_eq.get('location', 'Unknown')
+                
+                logger.info(f"Latest: M{magnitude} - {location}")
+                
+                # Check cache to avoid duplicate alerts
+                cached_eq = load_earthquake_cache()
+                
+                if should_send_earthquake_alert(latest_eq, cached_eq):
+                    logger.info(f"📢 NEW EARTHQUAKE DETECTED - Sending alert...")
+                    logger.info(f"   Magnitude: {magnitude}")
+                    logger.info(f"   Location: {location}")
+                    logger.info(f"   Time: {latest_eq.get('datetime_str')}")
+                    
+                    # Send earthquake alert
+                    notifier.send_earthquake_alert(latest_eq)
+                    
+                    # Save to cache to prevent duplicate alerts
+                    save_earthquake_cache(latest_eq)
+                    
+                    logger.info("✅ Earthquake alert sent successfully")
+                else:
+                    logger.info("⏭️  Earthquake already reported, skipping duplicate alert")
+                
+                # If there are multiple significant earthquakes, log them
+                if len(significant_earthquakes) > 1:
+                    logger.info(f"📊 Other significant earthquakes detected:")
+                    for eq in significant_earthquakes[1:5]:  # Log up to 4 more
+                        logger.info(f"   - M{eq.get('magnitude')} at {eq.get('location')}")
+            else:
+                logger.info("✅ No significant earthquakes detected (magnitude >= 3.8)")
+        
+        except Exception as e:
+            logger.warning(f"⚠️  Error checking earthquakes (non-critical): {e}")
+            logger.warning("Continuing with normal operation...")
+        
+        logger.info("="*60)
+        logger.info("")
     
     except Exception as e:
         logger.error(f"Error in main execution: {e}", exc_info=True)
