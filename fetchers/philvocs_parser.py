@@ -1,6 +1,6 @@
 """
-PHIVOLCS Earthquake Parser
-Fetches and parses earthquake data from PHIVOLCS
+PHILVOCS Earthquake Parser
+Fetches and parses earthquake data from PHILVOCS
 """
 
 import requests
@@ -13,8 +13,8 @@ import json
 logger = logging.getLogger(__name__)
 
 
-class PHIVOLCSParser:
-    """Parser for PHIVOLCS earthquake data"""
+class PHILVOCSParser:
+    """Parser for PHILVOCS earthquake data"""
     
     EARTHQUAKE_URL = "https://earthquake.phivolcs.dost.gov.ph/"
     
@@ -29,24 +29,24 @@ class PHIVOLCSParser:
     
     def fetch_recent_earthquakes(self, limit=20):
         """
-        Fetch recent earthquake data from PHIVOLCS
+        Fetch recent earthquake data from PHILVOCS
         Returns list of earthquake dictionaries
         """
         try:
             logger.info(f"Fetching earthquakes from: {self.EARTHQUAKE_URL}")
             
-            # Note: PHIVOLCS site has SSL issues, so we disable verification
+            # Note: PHILVOCS site has SSL issues, so we disable verification
             response = self.session.get(
                 self.EARTHQUAKE_URL, 
                 timeout=30, 
-                verify=False  # PHIVOLCS has SSL cert issues
+                verify=False  # PHILVOCS has SSL cert issues
             )
             response.raise_for_status()
             
             logger.info(f"Earthquake page fetched, length: {len(response.text)} chars")
             
             # Save debug copy
-            with open('debug_phivolcs_page.html', 'w', encoding='utf-8') as f:
+            with open('debug_philvocs_page.html', 'w', encoding='utf-8') as f:
                 f.write(response.text)
             
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -66,11 +66,11 @@ class PHIVOLCSParser:
             return []
     
     def _parse_earthquake_table(self, soup):
-        """Parse the earthquake table from PHIVOLCS page"""
+        """Parse the earthquake table from PHILVOCS page"""
         earthquakes = []
         
         try:
-            # Find the main table - PHIVOLCS uses a specific table structure
+            # Find the main table - PHILVOCS uses a specific table structure
             # Try multiple selectors to find the earthquake data table
             table = None
             
@@ -98,7 +98,7 @@ class PHIVOLCSParser:
             for row in data_rows:
                 cols = row.find_all('td')
                 
-                # PHIVOLCS table format typically:
+                # PHILVOCS table format typically:
                 # Date-Time | Latitude | Longitude | Depth (km) | Magnitude | Location
                 if len(cols) >= 5:
                     try:
@@ -150,7 +150,7 @@ class PHIVOLCSParser:
                 'depth_km': depth,
                 'magnitude': magnitude,
                 'location': location_str,
-                'source': 'PHIVOLCS',
+                'source': 'PHILVOCS',
                 'is_significant': magnitude >= self.ALERT_THRESHOLD
             }
             
@@ -196,7 +196,7 @@ class PHIVOLCSParser:
     def _parse_datetime(self, datetime_str):
         """Parse datetime string to datetime object"""
         try:
-            # Try common PHIVOLCS datetime formats
+            # Try common PHILVOCS datetime formats
             formats = [
                 '%d %B %Y - %I:%M %p',  # e.g., "15 October 2025 - 09:43 AM"
                 '%Y-%m-%d %H:%M:%S',    # e.g., "2025-10-15 09:43:00"
@@ -321,9 +321,9 @@ if __name__ == "__main__":
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    parser = PHIVOLCSParser()
+    parser = PHILVOLCSParser()
     
-    print("=== Testing PHIVOLCS Parser ===\n")
+    print("=== Testing PHILVOCS Parser ===\n")
     
     # Test 1: Fetch recent earthquakes
     print("[TEST 1] Fetching recent earthquakes...")
