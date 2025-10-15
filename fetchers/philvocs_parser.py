@@ -128,6 +128,12 @@ class PHILVOCSParser:
             magnitude_str = cols[4].get_text(strip=True)
             location_str = cols[5].get_text(strip=True) if len(cols) > 5 else 'N/A'
             
+            # Clean up encoding issues in location string
+            # Fix common character encoding problems from PHILVOCS
+            location_str = location_str.replace('Â°', '°')  # Fix degree symbol
+            location_str = location_str.replace('â€™', "'")  # Fix apostrophe
+            location_str = location_str.replace('â€"', '–')  # Fix dash
+            
             # Skip header rows (they contain text like "Date - Time")
             if 'Date' in date_time_str or 'Time' in date_time_str or 'Philippine' in date_time_str:
                 return None
