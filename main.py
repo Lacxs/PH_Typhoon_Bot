@@ -68,7 +68,7 @@ def should_skip_run():
     Returns True if we should skip (no elevated threat and odd hour).
     """
     # ALWAYS run if manually forced via environment variable
-    force_status = os.getenv("FORCE_STATUS_REPORT", "false").lower() == "true"
+    force_status = (os.getenv("FORCE_STATUS_REPORT") or "false").lower() == "true"
     if force_status:
         return False
     
@@ -275,7 +275,7 @@ def main():
         return
     
     # Check if manual status report was requested
-    force_status = os.getenv("FORCE_STATUS_REPORT", "false").lower() == "true"
+    force_status = (os.getenv("FORCE_STATUS_REPORT") or "false").lower() == "true"
     
     # Initialize components
     pagasa = PAGASAParser()
