@@ -262,141 +262,143 @@ class TelegramNotifier:
         
         return message
     
-    def _format_typhoon_message(self, data):
-        """Format typhoon/tropical cyclone alert message - Professional Option B style"""
-        cyclone_name = data.get('cyclone_name', 'Unknown')
-        system_type = data.get('type', 'Tropical Cyclone')
-        location = data.get('location', {})
-        movement = data.get('movement', {})
-        intensity = data.get('intensity', {})
-        port_status = data.get('port_status', {})
+def _format_typhoon_message(self, data):
+    """Format typhoon/tropical cyclone alert message - Professional Option B style"""
+    cyclone_name = data.get('cyclone_name', 'Unknown')
+    system_type = data.get('type', 'Tropical Cyclone')
+    location = data.get('location', {})
+    movement = data.get('movement', {})
+    intensity = data.get('intensity', {})
+    port_status = data.get('port_status', {})
+    
+    # Determine if system is outside PAR
+    is_outside_par = 'outside' in (system_type or "").lower() or 'outside' in (cyclone_name or "").lower()
+    
+    # Choose appropriate emoji and header
+    system_type_lower = (system_type or "").lower()
+    if 'super typhoon' in system_type_lower:
+        emoji = '🌪️'
+    elif 'typhoon' in system_type_lower:
+        emoji = '🌀'
+    elif 'tropical storm' in system_type_lower:
+        emoji = '🌊'
+    else:
+        emoji = '🌧️'
+    
+    # === HEADER ===
+    message = f"{emoji} *PAGASA WEATHER BULLETIN*\n\n"
+    
+    # System name and classification
+    cyclone_name_lower = (cyclone_name or "").lower()
+    if cyclone_name and cyclone_name_lower not in ['unknown', 'none'] and '(outside par)' not in cyclone_name_lower and cyclone_name_lower != system_type_lower:
+        # Has a proper Philippine name (like "Paolo", "Kristine", etc.)
+        message += f"*Name:* {cyclone_name}\n"
+        message += f"*Classification:* {system_type}\n"
+    else:
+        # No proper name, just show classification
+        message += f"*Classification:* {system_type}\n"
+    
+    # Status line
+    if is_outside_par:
+        message += f"*Location:* Outside Philippine Area of Responsibility\n"
+        message += f"*Status:* Being monitored\n"
+    else:
+        message += f"*Location:* Within Philippine Area of Responsibility\n"
+        message += f"*Status:* Active threat\n"
+    
+    # === CURRENT DATA SECTION ===
+    message += f"\n📊 *CURRENT DATA*\n"
+    message += f"━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # Position
+    lat = location.get('latitude')
+    lon = location.get('longitude')
+    if lat and lon:
+        lat_dir = 'N' if lat >= 0 else 'S'
+        lon_dir = 'E' if lon >= 0 else 'W'
+        message += f"*Position:* {abs(lat):.1f}°{lat_dir}, {abs(lon):.1f}°{lon_dir}\n"
         
-        # Determine if system is outside PAR
-        is_outside_par = 'outside' in (system_type or "").lower() or 'outside' in (cyclone_name or "").lower()
+        # Calculate distance from Manila for context
+        manila_lat, manila_lon = 14.6036, 120.9466
+        from math import radians, cos, sin, asin, sqrt
         
-        # Choose appropriate emoji and header
-        if 'super typhoon' in system_type.lower():
-            emoji = '🌪️'
-        elif 'typhoon' in system_type.lower():
-            emoji = '🌀'
-        elif 'tropical storm' in system_type.lower():
-            emoji = '🌊'
+        # Haversine formula
+        lat1, lon1, lat2, lon2 = map(radians, [manila_lat, manila_lon, lat, lon])
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+        a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+        c = 2 * asin(sqrt(a))
+        distance_km = 6371 * c
+        
+        # Determine direction from Manila
+        if lon > 125:
+            direction = "East"
+        elif lon < 118:
+            direction = "West"
         else:
-            emoji = '🌧️'
-        
-        # === HEADER ===
-        message = f"{emoji} *PAGASA WEATHER BULLETIN*\n\n"
-        
-        # System name and classification
-        if cyclone_name and cyclone_name.lower() not in ['unknown', 'none'] and '(outside par)' not in cyclone_name.lower() and cyclone_name.lower() != system_type.lower():
-            # Has a proper Philippine name (like "Paolo", "Kristine", etc.)
-            message += f"*Name:* {cyclone_name}\n"
-            message += f"*Classification:* {system_type}\n"
-        else:
-            # No proper name, just show classification
-            message += f"*Classification:* {system_type}\n"
-        
-        # Status line
-        if is_outside_par:
-            message += f"*Location:* Outside Philippine Area of Responsibility\n"
-            message += f"*Status:* Being monitored\n"
-        else:
-            message += f"*Location:* Within Philippine Area of Responsibility\n"
-            message += f"*Status:* Active threat\n"
-        
-        # === CURRENT DATA SECTION ===
-        message += f"\n📊 *CURRENT DATA*\n"
-        message += f"━━━━━━━━━━━━━━━━━━━━\n"
-        
-        # Position
-        lat = location.get('latitude')
-        lon = location.get('longitude')
-        if lat and lon:
-            lat_dir = 'N' if lat >= 0 else 'S'
-            lon_dir = 'E' if lon >= 0 else 'W'
-            message += f"*Position:* {abs(lat):.1f}°{lat_dir}, {abs(lon):.1f}°{lon_dir}\n"
-            
-            # Calculate distance from Manila for context
-            manila_lat, manila_lon = 14.6036, 120.9466
-            from math import radians, cos, sin, asin, sqrt
-            
-            # Haversine formula
-            lat1, lon1, lat2, lon2 = map(radians, [manila_lat, manila_lon, lat, lon])
-            dlat = lat2 - lat1
-            dlon = lon2 - lon1
-            a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
-            c = 2 * asin(sqrt(a))
-            distance_km = 6371 * c
-            
-            # Determine direction from Manila
-            if lon > 125:
-                direction = "East"
-            elif lon < 118:
-                direction = "West"
+            if lat > 14.6:
+                direction = "North"
             else:
-                if lat > 14.6:
-                    direction = "North"
-                else:
-                    direction = "South"
-            
-            if lat > 15:
-                region = "Luzon"
-            elif lat > 10:
-                region = "Visayas"
-            else:
-                region = "Mindanao"
-            
-            message += f"*Distance:* {int(distance_km)} km {direction} of {region}\n"
+                direction = "South"
         
-        # Intensity
-        winds = intensity.get('winds')
-        gusts = intensity.get('gusts')
-        if winds and gusts:
-            message += f"*Winds:* {winds} km/h (Gusts: {gusts} km/h)\n"
-        elif winds:
-            message += f"*Winds:* {winds} km/h\n"
-        
-        # Movement
-        direction = movement.get('direction')
-        speed = movement.get('speed')
-        if direction and speed:
-            # Format direction nicely
-            dir_formatted = direction.replace('WARD', '').title()
-            message += f"*Moving:* {dir_formatted} at {speed} km/h\n"
-        elif direction:
-            message += f"*Moving:* {direction.title()}\n"
+        if lat > 15:
+            region = "Luzon"
+        elif lat > 10:
+            region = "Visayas"
         else:
-            message += f"*Moving:* Slow-moving or quasi-stationary\n"
+            region = "Mindanao"
         
-        # === TERMINAL STATUS SECTION ===
-        message += f"\n🏗️ *TERMINAL STATUS*\n"
+        message += f"*Distance:* {int(distance_km)} km {direction} of {region}\n"
+    
+    # Intensity
+    winds = intensity.get('winds')
+    gusts = intensity.get('gusts')
+    if winds and gusts:
+        message += f"*Winds:* {winds} km/h (Gusts: {gusts} km/h)\n"
+    elif winds:
+        message += f"*Winds:* {winds} km/h\n"
+    
+    # Movement
+    direction = movement.get('direction')
+    speed = movement.get('speed')
+    if direction and speed:
+        # Format direction nicely
+        dir_formatted = direction.replace('WARD', '').title()
+        message += f"*Moving:* {dir_formatted} at {speed} km/h\n"
+    elif direction:
+        message += f"*Moving:* {direction.title()}\n"
+    else:
+        message += f"*Moving:* Slow-moving or quasi-stationary\n"
+    
+    # === TERMINAL STATUS SECTION ===
+    message += f"\n🏗️ *TERMINAL STATUS*\n"
+    message += f"━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # Sort ports by threat level (most threatened first)
+    sorted_ports = self._sort_ports_by_threat(port_status)
+    
+    for port_name in sorted_ports:
+        status = port_status[port_name]
+        message += self._format_port_status_professional(port_name, status)
+    
+    # === ACTION RECOMMENDATIONS ===
+    recommendations = self._get_action_recommendations(port_status)
+    if recommendations:
+        message += f"\n⚠️ *RECOMMENDED ACTIONS*\n"
         message += f"━━━━━━━━━━━━━━━━━━━━\n"
-        
-        # Sort ports by threat level (most threatened first)
-        sorted_ports = self._sort_ports_by_threat(port_status)
-        
-        for port_name in sorted_ports:
-            status = port_status[port_name]
-            message += self._format_port_status_professional(port_name, status)
-        
-        # === ACTION RECOMMENDATIONS ===
-        recommendations = self._get_action_recommendations(port_status)
-        if recommendations:
-            message += f"\n⚠️ *RECOMMENDED ACTIONS*\n"
-            message += f"━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"{recommendations}\n"
-        
-        # === FOOTER ===
-        # Next bulletin time
-        next_bulletin = data.get('next_bulletin')
-        if next_bulletin:
-            message += f"\n⏰ *Next Bulletin:* {next_bulletin}\n"
-        
-        # Timestamp
-        timestamp = datetime.now(PHT).strftime("%Y-%m-%d %H:%M PHT")
-        message += f"\n*Updated:* {timestamp}"
-        
-        return message
+        message += f"{recommendations}\n"
+    
+    # === FOOTER ===
+    # Next bulletin time
+    next_bulletin = data.get('next_bulletin')
+    if next_bulletin:
+        message += f"\n⏰ *Next Bulletin:* {next_bulletin}\n"
+    
+    # Timestamp
+    timestamp = datetime.now(PHT).strftime("%Y-%m-%d %H:%M PHT")
+    message += f"\n*Updated:* {timestamp}"
+    
+    return message
     
     def _format_port_status_professional(self, port_name, status):
         """Format individual port status line - Professional style for Option B"""
