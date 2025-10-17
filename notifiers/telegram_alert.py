@@ -272,7 +272,7 @@ class TelegramNotifier:
         port_status = data.get('port_status', {})
         
         # Determine if system is outside PAR
-        is_outside_par = 'outside' in system_type.lower() or 'outside' in cyclone_name.lower()
+        is_outside_par = 'outside' in (system_type or "").lower() or 'outside' in (cyclone_name or "").lower()
         
         # Choose appropriate emoji and header
         if 'super typhoon' in system_type.lower():
