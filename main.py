@@ -140,8 +140,14 @@ def should_send_alert(current_bulletin, cached_bulletin):
     if not cached_bulletin:
         return True
     
+    # Check if cyclone name changed (new system)
+    if current_bulletin.get("cyclone_name") != cached_bulletin.get("cyclone_name"):
+        logger.info("New cyclone detected - sending alert")
+        return True
+    
     # Check if bulletin timestamp changed
     if current_bulletin.get("bulletin_time") != cached_bulletin.get("bulletin_time"):
+        logger.info("Bulletin time changed - sending alert")
         return True
     
     # Check if any port status changed significantly
@@ -154,6 +160,7 @@ def should_send_alert(current_bulletin, cached_bulletin):
         
         # TCWS level changed
         if current.get("tcws") != cached.get("tcws"):
+            logger.info(f"TCWS level changed for {port} - sending alert")
             return True
         
         # ETA changed by more than 3 hours
@@ -161,10 +168,11 @@ def should_send_alert(current_bulletin, cached_bulletin):
         cached_eta = cached.get("eta_hours")
         if current_eta and cached_eta:
             if abs(current_eta - cached_eta) > 3:
+                logger.info(f"ETA changed significantly for {port} - sending alert")
                 return True
     
+    logger.info("No significant changes detected")
     return False
-
 
 def should_send_status_update():
     """Check if we should send status update (twice daily at 7 AM and 7 PM PHT)"""
