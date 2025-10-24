@@ -2,7 +2,9 @@ import requests
 from bs4 import BeautifulSoup
 import re
 import logging
+import json
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -190,9 +192,50 @@ class PAGASAParser:
                 'next_bulletin': None,
                 'source': 'PAGASA Severe Weather Bulletin'
             }
-            
+
             logger.info(f"Bulletin data prepared: name={bulletin_data['name']}, type={bulletin_data['type']}, lat={bulletin_data['latitude']}, lon={bulletin_data['longitude']}")
-            
+
+            # === DATA VALIDATION ===
+            try:
+                from validators.data_validator import DataValidator
+
+                is_valid, errors, warnings = DataValidator.validate_bulletin(bulletin_data)
+
+                if not is_valid:
+                    logger.error("="*60)
+                    logger.error("DATA VALIDATION FAILED")
+                    logger.error("="*60)
+                    for error in errors:
+                        logger.error(f"  ❌ {error}")
+
+                    # Save failed validation data for debugging
+                    debug_dir = Path("data")
+                    debug_dir.mkdir(exist_ok=True, parents=True)
+                    debug_file = debug_dir / "failed_validation.json"
+
+                    with open(debug_file, 'w') as f:
+                        json.dump({
+                            'timestamp': datetime.now().isoformat(),
+                            'errors': errors,
+                            'warnings': warnings,
+                            'bulletin_data': bulletin_data
+                        }, f, indent=2)
+
+                    logger.error(f"Failed validation data saved to {debug_file}")
+                    logger.error("="*60)
+                    return None
+
+                if warnings:
+                    logger.warning("Data validation warnings:")
+                    for warning in warnings:
+                        logger.warning(f"  ⚠️  {warning}")
+
+                logger.info("✅ Data validation passed")
+
+            except Exception as e:
+                logger.warning(f"Could not run data validation: {e}")
+                # Continue anyway - don't block on validation errors
+
             return bulletin_data
             
         except Exception as e:

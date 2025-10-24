@@ -14,6 +14,7 @@ from fetchers.jtwc_parser import JTWCParser
 from fetchers.philvocs_parser import PHILVOCSParser  # NEW: Earthquake monitoring
 from processors.compute_eta import PortETACalculator
 from notifiers.telegram_alert import TelegramNotifier
+from validators.temporal_validator import TemporalValidator  # NEW: Temporal validation
 
 # Configure logging
 logging.basicConfig(
@@ -381,8 +382,59 @@ def main():
             
             # Check if we should send alert
             cached = load_cache()
-            
-            if should_send_alert(bulletin_data, cached):
+
+            # === TEMPORAL VALIDATION ===
+            # Check if the new bulletin shows realistic movement compared to cached data
+            validation_passed = True
+
+            if cached and cached.get('cyclone_name') == bulletin_data.get('cyclone_name'):
+                logger.info("Running temporal consistency validation...")
+
+                time_diff_hours = TemporalValidator.estimate_time_difference(cached, bulletin_data)
+
+                # Validate position change
+                is_realistic, temp_warnings = TemporalValidator.validate_position_change(
+                    cached, bulletin_data, time_diff_hours
+                )
+
+                if not is_realistic:
+                    logger.error("="*60)
+                    logger.error("TEMPORAL VALIDATION FAILED")
+                    logger.error("="*60)
+                    for warning in temp_warnings:
+                        logger.error(f"  ❌ {warning}")
+                    logger.error("Bulletin data appears to contain parsing errors.")
+                    logger.error("Skipping typhoon alert to prevent false information.")
+                    logger.error("="*60)
+
+                    # Send error notification to admin
+                    try:
+                        error_msg = f"⚠️ VALIDATION ERROR\n\nTemporal validation failed:\n" + "\n".join(temp_warnings)
+                        notifier.send_error_notification(error_msg)
+                    except:
+                        pass
+
+                    validation_passed = False
+
+                if temp_warnings and validation_passed:
+                    logger.warning("Temporal validation warnings:")
+                    for warning in temp_warnings:
+                        logger.warning(f"  ⚠️  {warning}")
+
+                # Validate intensity change
+                if validation_passed:
+                    is_realistic_intensity, intensity_warnings = TemporalValidator.validate_intensity_change(
+                        cached, bulletin_data, time_diff_hours
+                    )
+
+                    if intensity_warnings:
+                        for warning in intensity_warnings:
+                            logger.info(f"  ℹ️  {warning}")
+
+                    logger.info("✅ Temporal validation passed")
+
+            # Only send alert if validation passed
+            if validation_passed and should_send_alert(bulletin_data, cached):
                 logger.info("Sending Telegram alert...")
                 notifier.send_alert(bulletin_data)
                 
